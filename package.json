@@ -16,6 +16,7 @@
   "build": {
     "appId": "com.surspark.huaci",
     "productName": "划词助手",
+    "executableName": "huaci-app",
     "copyright": "Copyright © Surspark",
     "directories": {
       "output": "dist"
@@ -28,6 +29,7 @@
     "asarUnpack": [
       "**/node_modules/selection-hook/**"
     ],
+    "npmRebuild": false,
     "mac": {
       "category": "public.app-category.productivity",
       "target": [
@@ -51,10 +53,7 @@
       "createDesktopShortcut": false,
       "createStartMenuShortcut": true
     },
-    "publish": {
-      "provider": "github",
-      "releaseType": "release"
-    }
+    "publish": null
   },
   "devDependencies": {
     "@electron/rebuild": "^3.7.1",
