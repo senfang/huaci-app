@@ -1,6 +1,6 @@
 {
   "name": "huaci-app",
-  "version": "1.0.0",
+  "version": "1.0.4",
   "description": "系统级划词助手 - 可配置工具栏与多个 Dify 工作流",
   "main": "electron/main.js",
   "author": "Surspark",
