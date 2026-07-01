@@ -7,15 +7,14 @@ const {
   clipboard,
   shell,
   systemPreferences,
-  nativeImage,
 } = require('electron');
-const path = require('path');
 
 const config = require('./app-config');
 const { runDifyWorkflow } = require('./dify');
 const selection = require('./selection');
 const windows = require('./windows');
 const loginItem = require('./login-item');
+const { getTrayIcon, getAppIcon } = require('./icons');
 
 let tray = null;
 let activeAbort = null;
@@ -63,27 +62,8 @@ function updateTrayMenu() {
   if (tray) tray.setContextMenu(buildTrayMenu());
 }
 
-function createTrayIcon() {
-  const fs = require('fs');
-  const iconPath = path.join(__dirname, '..', 'assets', 'trayTemplate.png');
-  if (fs.existsSync(iconPath)) {
-    const icon = nativeImage.createFromPath(iconPath);
-    if (process.platform === 'darwin') icon.setTemplateImage(true);
-    return icon.resize({ width: 18, height: 18 });
-  }
-
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
-    <path fill="#000" d="M4 3.5h10a1 1 0 0 1 0 2H10v9a1 1 0 0 1-2 0v-9H4a1 1 0 0 1 0-2z"/>
-  </svg>`;
-  const icon = nativeImage.createFromDataURL(
-    `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`
-  );
-  if (process.platform === 'darwin') icon.setTemplateImage(true);
-  return icon.resize({ width: 18, height: 18 });
-}
-
 function createTray() {
-  tray = new Tray(createTrayIcon());
+  tray = new Tray(getTrayIcon());
   tray.setToolTip('划词助手');
   tray.setContextMenu(buildTrayMenu());
   tray.on('click', () => windows.createSettingsWindow());
@@ -229,6 +209,10 @@ function registerIpc() {
 }
 
 app.whenReady().then(() => {
+  if (process.platform === 'win32') {
+    app.setAppUserModelId('com.surspark.huaci');
+  }
+
   if (process.platform === 'darwin') {
     app.dock.hide();
   }

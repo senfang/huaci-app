@@ -15,10 +15,18 @@ function showToast() {
 }
 
 function profileOptionsHtml(selectedId) {
-  const opts = config.difyProfiles.map(
-    (p) => `<option value="${p.id}" ${p.id === selectedId ? 'selected' : ''}>${escapeHtml(p.name)}</option>`
+  const profiles = collectProfilesFromDom();
+  const opts = profiles.map(
+    (p) => `<option value="${p.id}" ${p.id === selectedId ? 'selected' : ''}>${escapeHtml(p.name || '未命名工作流')}</option>`
   );
   return opts.join('') || '<option value="">（请先添加工作流）</option>';
+}
+
+function collectProfilesFromDom() {
+  return [...profileList.querySelectorAll('.profile-card')].map((card) => ({
+    id: card.dataset.id,
+    name: card.querySelector('.profile-name').value.trim() || '未命名工作流',
+  }));
 }
 
 function escapeHtml(str) {
@@ -99,6 +107,10 @@ function renderProfiles() {
     card.querySelector('.profile-apiKey').value = profile.apiKey || '';
     card.querySelector('.profile-inputVariable').value = profile.inputVariable || 'query';
     card.querySelector('.profile-userId').value = profile.userId || 'huaci-app-user';
+
+    card.querySelector('.profile-name').addEventListener('input', () => {
+      refreshProfileSelects();
+    });
 
     card.querySelector('.btn-delete-profile').addEventListener('click', () => {
       if (!confirm(`确定删除工作流「${profile.name}」？`)) return;

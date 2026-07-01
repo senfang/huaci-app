@@ -1,5 +1,6 @@
 const { BrowserWindow, screen } = require('electron');
 const path = require('path');
+const { getAppIcon } = require('./icons');
 
 let toolbarWindow = null;
 let dialogWindow = null;
@@ -55,12 +56,14 @@ function createDialogWindow() {
     show: false,
     frame: false,
     transparent: true,
+    backgroundColor: '#00000000',
     resizable: true,
     minimizable: false,
     maximizable: false,
     skipTaskbar: true,
     alwaysOnTop: true,
-    hasShadow: false,
+    hasShadow: true,
+    icon: getAppIcon(256),
     type: process.platform === 'darwin' ? 'panel' : 'normal',
     webPreferences: {
       preload: getPreload('dialog'),
@@ -93,6 +96,7 @@ function createSettingsWindow() {
     minHeight: 560,
     title: '划词助手设置',
     show: false,
+    icon: getAppIcon(256),
     webPreferences: {
       preload: getPreload('settings'),
       contextIsolation: true,
