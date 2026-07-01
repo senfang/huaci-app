@@ -43,7 +43,7 @@ jobs:
           npm version "$tag" --no-git-tag-version --allow-same-version
 
       - name: Validate icon.png
-        run: node -e "const fs=require('fs');const b=fs.readFileSync('assets/icon.png');if(b.length<1000)throw new Error('icon.png too small');const w=b.readUInt32BE(16),h=b.readUInt32BE(20);if(w<512||h<512)throw new Error(`icon.png must be at least 512x512, got ${w}x${h}`);console.log(`icon.png OK: ${w}x${h}`);"
+        run: node scripts/validate-icon.js
 
       - name: Install dependencies
         run: npm ci
