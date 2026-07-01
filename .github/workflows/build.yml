@@ -9,6 +9,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     strategy:
@@ -29,7 +33,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
@@ -38,7 +42,6 @@ jobs:
       - name: Build ${{ matrix.platform }}
         run: npm run build:${{ matrix.platform }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
       - name: Upload artifacts
@@ -46,7 +49,10 @@ jobs:
         with:
           name: huaci-${{ matrix.platform }}
           path: |
-            dist/**/*
+            dist/*.dmg
+            dist/*.zip
+            dist/*.exe
+            dist/*.blockmap
           if-no-files-found: error
 
   release:
@@ -62,9 +68,26 @@ jobs:
           path: dist
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: nick-fields/retry@v3
         with:
-          generate_release_notes: true
-          files: dist/**/*
+          timeout_minutes: 15
+          max_attempts: 5
+          retry_wait_seconds: 30
+          command: |
+            tag="${GITHUB_REF#refs/tags/}"
+            files=$(find dist -type f \( -name "*.dmg" -o -name "*.exe" -o -name "*.zip" \))
+            if [ -z "$files" ]; then
+              echo "No release files found"
+              find dist -type f || true
+              exit 1
+            fi
+            gh release view "$tag" --repo "$GITHUB_REPOSITORY" 2>/dev/null || \
+              gh release create "$tag" \
+                --repo "$GITHUB_REPOSITORY" \
+                --title "划词助手 ${tag}" \
+                --generate-notes
+            echo "$files" | while read -r file; do
+              gh release upload "$tag" "$file" --clobber --repo "$GITHUB_REPOSITORY"
+            done
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
