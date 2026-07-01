@@ -11,7 +11,7 @@ const {
 } = require('electron');
 const path = require('path');
 
-const config = require('./config');
+const config = require('./app-config');
 const { runDifyWorkflow } = require('./dify');
 const selection = require('./selection');
 const windows = require('./windows');
