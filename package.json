@@ -1,0 +1,69 @@
+{
+  "name": "huaci-app",
+  "version": "1.0.0",
+  "description": "系统级划词助手 - 可配置工具栏与多个 Dify 工作流",
+  "main": "electron/main.js",
+  "author": "Surspark",
+  "license": "MIT",
+  "scripts": {
+    "start": "env -u ELECTRON_RUN_AS_NODE electron .",
+    "dev": "env -u ELECTRON_RUN_AS_NODE electron . --enable-logging",
+    "rebuild": "electron-rebuild -f -w selection-hook",
+    "build": "electron-builder",
+    "build:mac": "electron-builder --mac",
+    "build:win": "electron-builder --win"
+  },
+  "build": {
+    "appId": "com.surspark.huaci",
+    "productName": "划词助手",
+    "copyright": "Copyright © Surspark",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "renderer/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "**/node_modules/selection-hook/**"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "extendInfo": {
+        "LSUIElement": true
+      }
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "zip"
+      ]
+    },
+    "nsis": {
+      "unicode": true,
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": false,
+      "createStartMenuShortcut": true
+    },
+    "publish": {
+      "provider": "github",
+      "releaseType": "release"
+    }
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^3.7.1",
+    "electron": "^34.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "dependencies": {
+    "electron-store": "^8.2.0",
+    "selection-hook": "^2.0.1",
+    "uuid": "^11.0.5"
+  }
+}

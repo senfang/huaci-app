@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>划词助手 - 设置</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="container">
+    <header class="page-header">
+      <h1>划词助手设置</h1>
+      <p class="subtitle">配置工具栏按钮与多个 Dify 工作流</p>
+    </header>
+
+    <div id="accessBanner" class="banner" style="display:none">
+      <div>
+        <strong>需要辅助功能权限</strong>
+        <p>系统级划词需要 macOS「辅助功能」权限，请在系统设置中授权本应用后重启。</p>
+      </div>
+      <button class="btn-secondary" id="openAccessibility">打开系统设置</button>
+    </div>
+
+    <section class="card">
+      <div class="card-header">
+        <h2>通用</h2>
+      </div>
+      <label class="toggle-row">
+        <span>
+          <strong>开机自动启动</strong>
+          <span class="hint inline-hint" id="launchAtLoginHint">登录后自动启动，在后台运行，不弹出窗口</span>
+        </span>
+        <input type="checkbox" id="launchAtLogin" />
+      </label>
+    </section>
+
+    <section class="card">
+      <div class="card-header">
+        <h2>工具栏按钮</h2>
+        <button class="btn-secondary" id="addButton">+ 添加按钮</button>
+      </div>
+      <p class="hint">划词后弹出的按钮，可绑定不同 Dify 工作流或复制操作。拖拽调整顺序。</p>
+      <ul id="buttonList" class="item-list"></ul>
+    </section>
+
+    <section class="card">
+      <div class="card-header">
+        <h2>Dify 工作流</h2>
+        <button class="btn-secondary" id="addProfile">+ 添加工作流</button>
+      </div>
+      <p class="hint">可配置多个 Dify 实例，每个按钮绑定其中一个工作流。</p>
+      <div id="profileList"></div>
+    </section>
+
+    <div class="actions">
+      <button class="btn-save" id="save">保存设置</button>
+      <span class="toast" id="toast">✓ 已保存</span>
+    </div>
+  </div>
+
+  <template id="buttonItemTpl">
+    <li class="item-row" draggable="true">
+      <span class="drag-handle">⋮⋮</span>
+      <label class="checkbox-wrap"><input type="checkbox" class="btn-enabled" /> 启用</label>
+      <input type="text" class="btn-label" placeholder="按钮文字" />
+      <input type="text" class="btn-icon" placeholder="图标 emoji" style="width:72px" />
+      <select class="btn-type">
+        <option value="dify">Dify 工作流</option>
+        <option value="copy">复制</option>
+      </select>
+      <select class="btn-profile"></select>
+      <label class="checkbox-wrap"><input type="checkbox" class="btn-primary" /> 主按钮</label>
+      <button class="btn-danger btn-delete">删除</button>
+    </li>
+  </template>
+
+  <template id="profileItemTpl">
+    <div class="profile-card">
+      <div class="profile-header">
+        <input type="text" class="profile-name" placeholder="工作流名称" />
+        <button class="btn-danger btn-delete-profile">删除</button>
+      </div>
+      <div class="field-grid">
+        <div class="field">
+          <label>API 地址</label>
+          <input type="url" class="profile-apiBaseUrl" placeholder="https://dify.surspark.com/v1" />
+        </div>
+        <div class="field">
+          <label>API Key</label>
+          <input type="password" class="profile-apiKey" placeholder="app-xxxxxxxx" />
+        </div>
+        <div class="field">
+          <label>输入变量名</label>
+          <input type="text" class="profile-inputVariable" placeholder="query" />
+        </div>
+        <div class="field">
+          <label>用户标识</label>
+          <input type="text" class="profile-userId" placeholder="huaci-app-user" />
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <script src="settings.js"></script>
+</body>
+</html>

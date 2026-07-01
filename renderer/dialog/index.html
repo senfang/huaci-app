@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI 解读</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="overlay">
+    <div class="dialog" role="dialog">
+      <div class="dialog-header">
+        <div>
+          <div class="dialog-title" id="dialogTitle">AI 解读</div>
+          <div class="dialog-subtitle" id="dialogSubtitle"></div>
+        </div>
+        <button class="dialog-close" id="closeBtn" aria-label="关闭">×</button>
+      </div>
+      <div class="dialog-body">
+        <div class="error-box" id="errorBox" style="display:none"></div>
+        <div class="section-label">执行过程</div>
+        <ul class="process-list" id="processList"></ul>
+        <div class="section-label">解读结果</div>
+        <div class="result-box empty" id="resultBox">等待工作流输出…</div>
+      </div>
+      <div class="status-bar">
+        <span class="spinner" id="spinner"></span>
+        <span class="status-text" id="statusText">正在调用 Dify 工作流…</span>
+        <button class="btn-stop" id="stopBtn">停止</button>
+      </div>
+    </div>
+  </div>
+  <script src="dialog.js"></script>
+</body>
+</html>
