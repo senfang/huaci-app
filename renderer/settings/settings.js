@@ -8,6 +8,99 @@ const profileList = document.getElementById('profileList');
 const buttonTpl = document.getElementById('buttonItemTpl');
 const profileTpl = document.getElementById('profileItemTpl');
 
+function formatAccelerator(accelerator) {
+  if (!accelerator) return '';
+  return accelerator
+    .split('+')
+    .map((part) => {
+      if (part === 'Control') return 'Ctrl';
+      if (part === 'CommandOrControl') return 'Ctrl/Cmd';
+      if (part === 'Backslash') return '\\';
+      if (part === 'Comma') return ',';
+      return part;
+    })
+    .join(' + ');
+}
+
+function keyEventToAccelerator(e) {
+  if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return null;
+
+  const mods = [];
+  if (e.ctrlKey) mods.push('Control');
+  if (e.altKey) mods.push('Alt');
+  if (e.shiftKey) mods.push('Shift');
+
+  if (!mods.length) return null;
+
+  const keyMap = {
+    '\\': 'Backslash',
+    ' ': 'Space',
+    ArrowUp: 'Up',
+    ArrowDown: 'Down',
+    ArrowLeft: 'Left',
+    ArrowRight: 'Right',
+    Escape: 'Esc',
+  };
+
+  let key = keyMap[e.key] || e.key;
+  if (key.length === 1) key = key.toUpperCase();
+
+  return [...mods, key].join('+');
+}
+
+function setupShortcutInput() {
+  const input = document.getElementById('settingsShortcut');
+  const errorEl = document.getElementById('shortcutError');
+  let recording = false;
+
+  input.addEventListener('focus', () => {
+    recording = true;
+    input.classList.add('recording');
+    input.value = '请按下快捷键…';
+    errorEl.style.display = 'none';
+  });
+
+  input.addEventListener('blur', () => {
+    if (!recording) return;
+    recording = false;
+    input.classList.remove('recording');
+    input.value = formatAccelerator(config.settingsShortcut || 'Control+]');
+  });
+
+  input.addEventListener('keydown', async (e) => {
+    if (!recording) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (e.key === 'Escape') {
+      input.blur();
+      return;
+    }
+
+    const accelerator = keyEventToAccelerator(e);
+    if (!accelerator) return;
+
+    const result = await window.huaci.registerSettingsShortcut(accelerator);
+    if (!result.ok) {
+      errorEl.textContent = `快捷键 ${formatAccelerator(accelerator)} 注册失败，可能被系统或其他应用占用`;
+      errorEl.style.display = 'block';
+      input.value = formatAccelerator(config.settingsShortcut || 'Control+]');
+      recording = false;
+      input.classList.remove('recording');
+      input.blur();
+      return;
+    }
+
+    config.settingsShortcut = accelerator;
+    input.value = formatAccelerator(accelerator);
+    recording = false;
+    input.classList.remove('recording');
+    errorEl.style.display = 'none';
+    showToast();
+    input.blur();
+  });
+}
+
 function showToast() {
   const toast = document.getElementById('toast');
   toast.classList.add('show');
@@ -150,12 +243,19 @@ function collectFormData() {
     difyProfiles: profiles,
     toolbarButtons: buttons,
     launchAtLogin: document.getElementById('launchAtLogin').checked,
+    selectionEnabled: document.getElementById('selectionEnabled').checked,
+    settingsShortcut: config.settingsShortcut || 'Control+]',
   };
 }
 
 async function load() {
   config = await window.huaci.getConfig();
   document.getElementById('launchAtLogin').checked = !!config.launchAtLogin;
+  document.getElementById('selectionEnabled').checked = config.selectionEnabled !== false;
+  document.getElementById('settingsShortcut').value = formatAccelerator(
+    config.settingsShortcut || 'Control+]'
+  );
+  setupShortcutInput();
   renderProfiles();
   renderButtons();
 
@@ -209,6 +309,12 @@ document.getElementById('launchAtLogin').addEventListener('change', async (e) =>
   } catch {
     e.target.checked = !enabled;
   }
+});
+
+document.getElementById('selectionEnabled').addEventListener('change', async (e) => {
+  const enabled = e.target.checked;
+  config = await window.huaci.saveConfig({ selectionEnabled: enabled });
+  showToast();
 });
 
 document.getElementById('openAccessibility').addEventListener('click', () => {

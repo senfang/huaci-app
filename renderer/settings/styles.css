@@ -56,6 +56,10 @@ body {
   cursor: pointer;
 }
 
+.toggle-row + .toggle-row {
+  margin-top: 12px;
+}
+
 .toggle-row strong {
   display: block;
   font-size: 14px;
@@ -72,6 +76,48 @@ body {
   height: 18px;
   accent-color: #6366f1;
   flex-shrink: 0;
+}
+
+.shortcut-field {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #eee;
+}
+
+.shortcut-field label {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.shortcut-input {
+  width: 100%;
+  max-width: 280px;
+  padding: 10px 12px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  font-size: 14px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: #fafafa;
+  cursor: pointer;
+}
+
+.shortcut-input:focus {
+  outline: none;
+  border-color: #6366f1;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+}
+
+.shortcut-input.recording {
+  border-color: #6366f1;
+  background: #f5f3ff;
+}
+
+.shortcut-error {
+  display: block;
+  color: #dc2626 !important;
+  margin-top: 6px;
 }
 
 .card h2 { font-size: 17px; }

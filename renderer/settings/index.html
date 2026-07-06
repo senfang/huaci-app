@@ -27,11 +27,24 @@
       </div>
       <label class="toggle-row">
         <span>
+          <strong>启用划词工具栏</strong>
+          <span class="hint inline-hint">关闭后选中文字不会弹出按钮，可在托盘菜单中重新开启</span>
+        </span>
+        <input type="checkbox" id="selectionEnabled" />
+      </label>
+      <label class="toggle-row">
+        <span>
           <strong>开机自动启动</strong>
           <span class="hint inline-hint" id="launchAtLoginHint">登录后自动启动，在后台运行，不弹出窗口</span>
         </span>
         <input type="checkbox" id="launchAtLogin" />
       </label>
+      <div class="field shortcut-field">
+        <label for="settingsShortcut">打开设置快捷键</label>
+        <input type="text" id="settingsShortcut" class="shortcut-input" readonly placeholder="点击后按下快捷键" />
+        <span class="hint">默认 Ctrl + ] ，点击输入框后按下新的组合键即可修改</span>
+        <span class="hint shortcut-error" id="shortcutError" style="display:none"></span>
+      </div>
     </section>
 
     <section class="card">

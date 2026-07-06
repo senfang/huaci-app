@@ -25,7 +25,7 @@ function createToolbarWindow() {
     transparent: true,
     resizable: false,
     movable: false,
-    focusable: true,
+    focusable: false,
     skipTaskbar: true,
     alwaysOnTop: true,
     hasShadow: false,
@@ -120,26 +120,46 @@ function hideToolbar() {
   }
 }
 
+function isToolbarVisible() {
+  return !!(toolbarWindow && !toolbarWindow.isDestroyed() && toolbarWindow.isVisible());
+}
+
+function isPointInToolbar(x, y) {
+  if (!isToolbarVisible()) return false;
+  const bounds = toolbarWindow.getBounds();
+  return (
+    x >= bounds.x &&
+    x <= bounds.x + bounds.width &&
+    y >= bounds.y &&
+    y <= bounds.y + bounds.height
+  );
+}
+
+function isDialogVisible() {
+  return !!(dialogWindow && !dialogWindow.isDestroyed() && dialogWindow.isVisible());
+}
+
 function showToolbar(payload) {
   const win = createToolbarWindow();
-  const { x, y, text, buttons } = payload;
+  const { x, y, text, buttons, rect } = payload;
 
-  const display = screen.getDisplayNearestPoint({ x, y });
-  const scale = display.scaleFactor || 1;
+  const anchorX = rect ? (rect.left + rect.right) / 2 : x;
+  const anchorY = rect ? rect.top : y;
+  const display = screen.getDisplayNearestPoint({ x: anchorX, y: anchorY });
   const bounds = display.bounds;
 
   const showAt = () => {
     const [width, height] = win.getSize();
-    let left = Math.round(x - width / 2);
-    let top = Math.round(y - height - 12);
+    let left = Math.round(anchorX - width / 2);
+    let top = Math.round(anchorY - height - 12);
 
     left = Math.max(bounds.x + 8, Math.min(left, bounds.x + bounds.width - width - 8));
     if (top < bounds.y + 8) {
-      top = Math.round(y + 16);
+      top = Math.round((rect ? rect.bottom : anchorY) + 16);
     }
 
     win.setBounds({ x: left, y: top, width, height }, false);
-    if (!win.isVisible()) win.showInactive();
+    win.showInactive();
     win.webContents.send('toolbar:show', { text, buttons });
   };
 
@@ -213,4 +233,7 @@ module.exports = {
   sendDialogEvent,
   getOverlayWebContents,
   resizeToolbar,
+  isToolbarVisible,
+  isPointInToolbar,
+  isDialogVisible,
 };

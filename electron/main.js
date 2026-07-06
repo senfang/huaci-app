@@ -14,6 +14,7 @@ const { runDifyWorkflow } = require('./dify');
 const selection = require('./selection');
 const windows = require('./windows');
 const loginItem = require('./login-item');
+const globalShortcuts = require('./global-shortcuts');
 const { getTrayIcon, getAppIcon } = require('./icons');
 
 let tray = null;
@@ -69,12 +70,28 @@ function createTray() {
   tray.on('click', () => windows.createSettingsWindow());
 }
 
-function handleSelection({ text, x, y }) {
+function handleSelection({ text, x, y, rect }) {
+  if (!config.getConfig().selectionEnabled) return;
   pendingSelectedText = text;
   const buttons = config.getEnabledToolbarButtons();
   if (!buttons.length) return;
 
-  windows.showToolbar({ text, x, y, buttons });
+  windows.hideToolbar();
+  windows.showToolbar({ text, x, y, rect, buttons });
+}
+
+function handleMouseDown({ x, y }) {
+  if (windows.isDialogVisible()) return;
+  if (x != null && y != null && windows.isPointInToolbar(x, y)) return;
+  windows.hideToolbar();
+}
+
+function handleDismiss({ escape } = {}) {
+  windows.hideToolbar();
+  if (escape) {
+    abortActiveWorkflow();
+    windows.hideDialog();
+  }
 }
 
 function abortActiveWorkflow() {
@@ -84,6 +101,16 @@ function abortActiveWorkflow() {
   }
 }
 
+function applySettingsShortcut(accelerator) {
+  const result = globalShortcuts.registerSettingsShortcut(accelerator, () => {
+    windows.createSettingsWindow();
+  });
+  if (!result.ok) {
+    console.warn('[shortcut] failed to register:', accelerator);
+  }
+  return result;
+}
+
 function registerIpc() {
   ipcMain.handle('config:get', () => config.getConfig());
 
@@ -91,10 +118,24 @@ function registerIpc() {
     const saved = config.saveConfig(partial);
     updateTrayMenu();
     selection.setMonitorEnabled(saved.selectionEnabled !== false);
+    if (saved.selectionEnabled === false) {
+      windows.hideToolbar();
+    }
     if ('launchAtLogin' in partial) {
       loginItem.applyLaunchAtLogin(saved.launchAtLogin);
     }
+    if ('settingsShortcut' in partial) {
+      applySettingsShortcut(saved.settingsShortcut);
+    }
     return saved;
+  });
+
+  ipcMain.handle('app:registerSettingsShortcut', (_e, accelerator) => {
+    const result = applySettingsShortcut(accelerator);
+    if (result.ok) {
+      config.saveConfig({ settingsShortcut: accelerator });
+    }
+    return result;
   });
 
   ipcMain.handle('app:setLaunchAtLogin', (_e, enabled) => {
@@ -224,7 +265,12 @@ app.whenReady().then(() => {
   const cfg = config.getConfig();
   selection.setMonitorEnabled(cfg.selectionEnabled !== false);
   loginItem.syncLaunchAtLogin(cfg.launchAtLogin);
-  selection.startSelectionMonitor(handleSelection);
+  selection.startSelectionMonitor({
+    onSelection: handleSelection,
+    onMouseDown: handleMouseDown,
+    onDismiss: handleDismiss,
+  });
+  applySettingsShortcut(cfg.settingsShortcut || 'Control+]');
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -238,6 +284,7 @@ app.on('window-all-closed', (e) => {
 });
 
 app.on('before-quit', () => {
+  globalShortcuts.unregisterAllShortcuts();
   selection.stopSelectionMonitor();
 });
 

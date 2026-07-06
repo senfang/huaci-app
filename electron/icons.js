@@ -35,9 +35,20 @@ function getAppIcon(size = 256) {
 
 function getTrayIcon() {
   if (process.platform === 'darwin') {
-    const icon = svgToImage(MAC_TRAY_SVG);
-    icon.setTemplateImage(true);
-    return icon.resize({ width: 18, height: 18 });
+    const iconPath = path.join(__dirname, '..', 'assets', 'trayTemplate.png');
+    if (fs.existsSync(iconPath)) {
+      const icon = nativeImage.createFromPath(iconPath);
+      if (!icon.isEmpty()) {
+        icon.setTemplateImage(true);
+        return icon;
+      }
+    }
+    const icon = svgToImage(MAC_TRAY_SVG, 22);
+    if (!icon.isEmpty()) {
+      icon.setTemplateImage(true);
+      return icon;
+    }
+    return getAppIcon(22);
   }
   return getAppIcon(16);
 }

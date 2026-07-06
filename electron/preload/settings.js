@@ -14,4 +14,5 @@ contextBridge.exposeInMainWorld('huaci', {
   openAccessibilitySettings: () => ipcRenderer.send('app:openAccessibilitySettings'),
   setLaunchAtLogin: (enabled) => ipcRenderer.invoke('app:setLaunchAtLogin', enabled),
   getLaunchAtLogin: () => ipcRenderer.invoke('app:getLaunchAtLogin'),
+  registerSettingsShortcut: (accelerator) => ipcRenderer.invoke('app:registerSettingsShortcut', accelerator),
 });

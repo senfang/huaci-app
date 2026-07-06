@@ -2,44 +2,125 @@ const SelectionHook = require('selection-hook');
 
 const MIN_LENGTH = 1;
 const MAX_LENGTH = 2000;
+const { PositionLevel, INVALID_COORDINATE } = SelectionHook;
 
 let hook = null;
 let enabled = true;
 let suppressUntil = 0;
 let onSelectionCallback = null;
+let onMouseDownCallback = null;
+let onDismissCallback = null;
 
-function getAnchorPoint(data) {
-  const end = data.mousePosEnd;
-  if (end && end.x != null && end.y != null) {
-    return { x: end.x, y: end.y };
+function isValidCoord(value) {
+  return (
+    typeof value === 'number' &&
+    Number.isFinite(value) &&
+    value !== INVALID_COORDINATE &&
+    value > -9999
+  );
+}
+
+function isValidPoint(point) {
+  return point && isValidCoord(point.x) && isValidCoord(point.y);
+}
+
+function getSelectionRect(data) {
+  const points = [data.startTop, data.startBottom, data.endTop, data.endBottom].filter(isValidPoint);
+  if (points.length < 2) return null;
+
+  const xs = points.map((p) => p.x);
+  const ys = points.map((p) => p.y);
+  const rect = {
+    left: Math.min(...xs),
+    right: Math.max(...xs),
+    top: Math.min(...ys),
+    bottom: Math.max(...ys),
+  };
+
+  const width = rect.right - rect.left;
+  const height = rect.bottom - rect.top;
+  // Native 模块未拿到选区矩形时，四个角会保持 CGPointZero (0,0)
+  if (width < 1 && height < 1) return null;
+
+  return rect;
+}
+
+function getSelectionAnchor(data) {
+  const posLevel = data.posLevel ?? PositionLevel.NONE;
+
+  // 只有 posLevel >= SEL_FULL 时，段落坐标才可信
+  if (posLevel >= PositionLevel.SEL_FULL) {
+    const rect = getSelectionRect(data);
+    if (rect) {
+      return {
+        x: (rect.left + rect.right) / 2,
+        y: rect.top,
+        rect,
+      };
+    }
+    if (isValidPoint(data.endBottom)) {
+      return { x: data.endBottom.x, y: data.endBottom.y, rect: null };
+    }
   }
-  const top = data.endTop || data.startTop;
-  if (top && top.x != null && top.y != null) {
-    return { x: top.x, y: top.y + 8 };
+
+  // 拖拽/点击选词：用鼠标位置（此时段落坐标往往是占位符 0,0）
+  if (posLevel >= PositionLevel.MOUSE_SINGLE && isValidPoint(data.mousePosEnd)) {
+    return { x: data.mousePosEnd.x, y: data.mousePosEnd.y, rect: null };
   }
-  return { x: 0, y: 0 };
+  if (isValidPoint(data.mousePosStart)) {
+    return { x: data.mousePosStart.x, y: data.mousePosStart.y, rect: null };
+  }
+
+  return null;
 }
 
 function handleSelection(data) {
   if (!enabled) return;
   if (Date.now() < suppressUntil) return;
-  if (!onSelectionCallback || !data?.text) return;
+  if (!onSelectionCallback) return;
+  if (!data?.text?.trim()) {
+    onDismissCallback?.();
+    return;
+  }
 
   const text = data.text.trim();
-  if (text.length < MIN_LENGTH || text.length > MAX_LENGTH) return;
+  if (text.length < MIN_LENGTH || text.length > MAX_LENGTH) {
+    onDismissCallback?.();
+    return;
+  }
 
   const program = (data.programName || '').toLowerCase();
   if (program.includes('electron') || program.includes('huaci')) return;
 
-  const { x, y } = getAnchorPoint(data);
-  onSelectionCallback({ text, x, y });
+  const anchor = getSelectionAnchor(data);
+  if (!anchor) return;
+
+  onSelectionCallback({ text, x: anchor.x, y: anchor.y, rect: anchor.rect });
 }
 
-function startSelectionMonitor(callback) {
-  onSelectionCallback = callback;
+function handleMouseDown(data) {
+  if (!enabled) return;
+  if (Date.now() < suppressUntil) return;
+  onMouseDownCallback?.(data);
+}
+
+function handleKeyDown(data) {
+  if (!enabled) return;
+  if (data?.uniKey === 'Escape') {
+    onDismissCallback?.({ escape: true });
+  }
+}
+
+function startSelectionMonitor(callbacks) {
+  const { onSelection, onMouseDown, onDismiss } = callbacks || {};
+  onSelectionCallback = onSelection;
+  onMouseDownCallback = onMouseDown;
+  onDismissCallback = onDismiss;
   hook = new SelectionHook();
 
   hook.on('text-selection', handleSelection);
+  hook.on('mouse-down', handleMouseDown);
+  hook.on('key-down', handleKeyDown);
   hook.on('error', (err) => {
     console.error('[selection-hook]', err);
   });
@@ -67,6 +148,8 @@ function stopSelectionMonitor() {
     hook = null;
   }
   onSelectionCallback = null;
+  onMouseDownCallback = null;
+  onDismissCallback = null;
 }
 
 function setMonitorEnabled(value) {

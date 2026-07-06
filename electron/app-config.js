@@ -35,11 +35,26 @@ const store = new Store({
     ],
     selectionEnabled: true,
     launchAtLogin: false,
+    settingsShortcut: 'Control+]',
   },
 });
 
+function normalizeSettingsShortcut(value) {
+  const legacyMap = {
+    'Control+Backslash': 'Control+]',
+  };
+  if (legacyMap[value]) return legacyMap[value];
+  return value || 'Control+]';
+}
+
 function getConfig() {
-  return store.store;
+  const data = store.store;
+  const normalized = normalizeSettingsShortcut(data.settingsShortcut);
+  if (normalized !== data.settingsShortcut) {
+    store.set('settingsShortcut', normalized);
+    data.settingsShortcut = normalized;
+  }
+  return data;
 }
 
 function getEnabledToolbarButtons() {
