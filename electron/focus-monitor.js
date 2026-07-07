@@ -1,4 +1,5 @@
 const { execFile } = require('child_process');
+const diagnostics = require('./selection-diagnostics');
 
 const FOREGROUND_SCRIPT = `
 Add-Type @"
@@ -11,10 +12,10 @@ public class Win32Foreground {
 "@
 $hwnd = [Win32Foreground]::GetForegroundWindow()
 if ($hwnd -eq [IntPtr]::Zero) { exit 1 }
-$pid = 0
-[void][Win32Foreground]::GetWindowThreadProcessId($hwnd, [ref]$pid)
-if ($pid -eq 0) { exit 1 }
-$p = Get-Process -Id $pid -ErrorAction SilentlyContinue
+$procId = 0
+[void][Win32Foreground]::GetWindowThreadProcessId($hwnd, [ref]$procId)
+if ($procId -eq 0) { exit 1 }
+$p = Get-Process -Id $procId -ErrorAction SilentlyContinue
 if ($null -eq $p) { exit 1 }
 Write-Output $p.ProcessName
 `.trim();
@@ -40,11 +41,18 @@ function queryForegroundProcess() {
   });
 }
 
-function isWebView2Process(name) {
-  return (name || '').includes('msedgewebview2');
+function classifyProcess(name) {
+  const n = (name || '').toLowerCase();
+  if (!n) return 'unknown';
+  if (n.includes('msedgewebview2')) return 'webview2';
+  if (n.includes('msedge') || n.includes('chrome') || n.includes('firefox')) return 'browser';
+  if (n.includes('applicationframehost') || n.includes('photos') || n.includes('photoviewer')) {
+    return 'image-viewer-shell';
+  }
+  return 'other';
 }
 
-function startFocusMonitor(onLeaveWebView2) {
+function startFocusMonitor() {
   if (process.platform !== 'win32' || pollTimer) return;
 
   pollTimer = setInterval(async () => {
@@ -52,11 +60,16 @@ function startFocusMonitor(onLeaveWebView2) {
     polling = true;
     try {
       const current = await queryForegroundProcess();
-      if (!current) return;
+      if (!current || current === lastForeground) return;
 
-      if (isWebView2Process(lastForeground) && !isWebView2Process(current)) {
-        onLeaveWebView2(current);
-      }
+      const fromClass = classifyProcess(lastForeground);
+      const toClass = classifyProcess(current);
+      diagnostics.logPhase('foreground-changed', {
+        from: lastForeground || null,
+        to: current,
+        fromClass,
+        toClass,
+      });
       lastForeground = current;
     } finally {
       polling = false;
@@ -73,8 +86,14 @@ function stopFocusMonitor() {
   lastForeground = '';
 }
 
+function getLastForeground() {
+  return lastForeground;
+}
+
 module.exports = {
   startFocusMonitor,
   stopFocusMonitor,
-  isWebView2Process,
+  getLastForeground,
+  queryForegroundProcess,
+  classifyProcess,
 };

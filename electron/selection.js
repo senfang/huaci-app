@@ -1,6 +1,7 @@
 const SelectionHook = require('selection-hook');
 const { normalizeAnchor } = require('./coordinates');
 const focusMonitor = require('./focus-monitor');
+const diagnostics = require('./selection-diagnostics');
 
 const MIN_LENGTH = 1;
 const MAX_LENGTH = 2000;
@@ -13,49 +14,36 @@ let savedCallbacks = null;
 let onSelectionCallback = null;
 let onMouseDownCallback = null;
 let onDismissCallback = null;
+let heartbeatTimer = null;
+let lastMouseDown = null;
+let probeTimer = null;
 
-const WIN_CLIPBOARD_EXCLUDE = [
-  'msedgewebview2.exe',
-  'MSEdgeWebView2.exe',
-  'Microsoft.Photos.exe',
-  'Photos.exe',
-  'PhotoViewer.exe',
-];
-
-const WIN_GLOBAL_EXCLUDE = [
-  'Electron',
-  'msedgewebview2.exe',
-  'MSEdgeWebView2.exe',
-  'Microsoft.Photos.exe',
-  'Photos.exe',
-  'PhotoViewer.exe',
-];
-
-function isWebView2Process(programName) {
-  return (programName || '').toLowerCase().includes('msedgewebview2');
-}
-
-function applyHookConfig() {
-  if (!hook) return;
-
-  hook.setGlobalFilterMode(SelectionHook.FilterMode.EXCLUDE_LIST, WIN_GLOBAL_EXCLUDE);
-
-  if (process.platform === 'win32') {
-    hook.setClipboardMode(SelectionHook.FilterMode.EXCLUDE_LIST, WIN_CLIPBOARD_EXCLUDE);
-  }
+function hookState() {
+  return {
+    enabled,
+    suppressUntil,
+    hookExists: !!hook,
+    hookRunning: hook ? hook.isRunning() : false,
+    foreground: focusMonitor.getLastForeground?.() || '',
+  };
 }
 
 function attachHookListeners() {
   hook.on('text-selection', handleSelection);
   hook.on('mouse-down', handleMouseDown);
+  hook.on('mouse-up', handleMouseUp);
   hook.on('key-down', handleKeyDown);
+  hook.on('status', (status) => {
+    diagnostics.log('hook status', { status, ...hookState() });
+  });
   hook.on('error', (err) => {
-    console.error('[selection-hook]', err);
+    diagnostics.log('hook error', { message: err?.message || String(err), ...hookState() });
   });
 }
 
-function detachHook() {
+function detachHook(reason) {
   if (!hook) return;
+  diagnostics.log('hook detach', { reason, ...hookState(), ...diagnostics.getStats() });
   try {
     hook.removeAllListeners();
     if (hook.isRunning()) {
@@ -63,34 +51,25 @@ function detachHook() {
     }
     hook.cleanup();
   } catch (err) {
-    console.error('[selection-hook] detach failed', err);
+    diagnostics.log('hook detach failed', { message: err?.message || String(err) });
   }
   hook = null;
 }
 
-function createAndStartHook() {
+function createAndStartHook(reason) {
   hook = new SelectionHook();
   attachHookListeners();
-  applyHookConfig();
+
+  hook.setGlobalFilterMode(SelectionHook.FilterMode.EXCLUDE_LIST, ['Electron']);
 
   const startConfig = {
-    debug: false,
-    enableClipboard: process.platform !== 'win32',
+    debug: true,
+    enableClipboard: true,
   };
 
   const started = hook.start(startConfig);
-  if (!started) {
-    console.warn('[selection-hook] failed to start');
-  }
+  diagnostics.log('hook start', { reason, started, ...hookState() });
   return started;
-}
-
-function recreateSelectionHook(reason) {
-  if (process.platform !== 'win32' || !savedCallbacks || !enabled) return;
-
-  console.log('[selection-hook] recreate:', reason || 'unknown');
-  detachHook();
-  createAndStartHook();
 }
 
 function isValidCoord(value) {
@@ -153,32 +132,95 @@ function getSelectionAnchor(data) {
   return null;
 }
 
-function handleSelection(data) {
-  if (!enabled) return;
-  if (Date.now() < suppressUntil) return;
-  if (!onSelectionCallback) return;
+function summarizeSelection(data) {
+  return {
+    programName: data?.programName || '',
+    method: data?.method,
+    posLevel: data?.posLevel,
+    textLen: data?.text?.trim()?.length || 0,
+    mouseEnd: data?.mousePosEnd,
+    endTop: data?.endTop,
+  };
+}
 
-  if (isWebView2Process(data.programName)) {
-    onDismissCallback?.();
+function dragDistance(start, end) {
+  if (!start || !end) return 0;
+  const dx = (end.x ?? 0) - (start.x ?? 0);
+  const dy = (end.y ?? 0) - (start.y ?? 0);
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function scheduleSelectionProbe(reason) {
+  if (process.platform !== 'win32' || !hook?.isRunning()) return;
+  if (probeTimer) clearTimeout(probeTimer);
+  probeTimer = setTimeout(() => {
+    probeTimer = null;
+    try {
+      const probe = hook.getCurrentSelection();
+      diagnostics.log('probe getCurrentSelection', {
+        reason,
+        ok: !!(probe?.text?.trim()),
+        textLen: probe?.text?.trim()?.length || 0,
+        program: probe?.programName || '',
+        method: probe?.method,
+        posLevel: probe?.posLevel,
+        ...hookState(),
+      });
+    } catch (err) {
+      diagnostics.log('probe getCurrentSelection failed', {
+        reason,
+        message: err?.message || String(err),
+        ...hookState(),
+      });
+    }
+  }, 180);
+}
+
+function handleSelection(data) {
+  diagnostics.mark('text-selection');
+  diagnostics.log('event text-selection', summarizeSelection(data));
+
+  if (!enabled) {
+    diagnostics.log('selection skipped', { reason: 'monitor disabled', ...hookState() });
     return;
   }
-
+  if (Date.now() < suppressUntil) {
+    diagnostics.log('selection skipped', { reason: 'suppressed', ...hookState() });
+    return;
+  }
+  if (!onSelectionCallback) {
+    diagnostics.log('selection skipped', { reason: 'no callback', ...hookState() });
+    return;
+  }
   if (!data?.text?.trim()) {
     onDismissCallback?.();
+    diagnostics.log('selection skipped', { reason: 'empty text', ...hookState() });
     return;
   }
 
   const text = data.text.trim();
   if (text.length < MIN_LENGTH || text.length > MAX_LENGTH) {
     onDismissCallback?.();
+    diagnostics.log('selection skipped', { reason: 'invalid length', len: text.length, ...hookState() });
     return;
   }
 
   const program = (data.programName || '').toLowerCase();
-  if (program.includes('electron') || program.includes('huaci')) return;
+  if (program.includes('electron') || program.includes('huaci')) {
+    diagnostics.log('selection skipped', { reason: 'self app', program, ...hookState() });
+    return;
+  }
 
   const anchor = getSelectionAnchor(data);
   const normalized = normalizeAnchor(anchor);
+  diagnostics.mark('selection-accepted');
+  diagnostics.log('selection accepted', {
+    program,
+    textPreview: text.slice(0, 40),
+    anchor: normalized,
+    ...hookState(),
+  });
+
   onSelectionCallback({
     text,
     x: normalized.x,
@@ -188,15 +230,39 @@ function handleSelection(data) {
 }
 
 function handleMouseDown(data) {
+  diagnostics.count('mouse-down');
+  lastMouseDown = { x: data?.x, y: data?.y, t: Date.now() };
   if (!enabled) return;
   if (Date.now() < suppressUntil) return;
   onMouseDownCallback?.(data);
 }
 
+function handleMouseUp(data) {
+  diagnostics.count('mouse-up');
+  const distance = dragDistance(lastMouseDown, data);
+  if (distance >= 8) {
+    scheduleSelectionProbe(`mouse-up drag=${Math.round(distance)}`);
+  }
+  lastMouseDown = null;
+}
+
 function handleKeyDown(data) {
-  if (!enabled) return;
   if (data?.uniKey === 'Escape') {
     onDismissCallback?.({ escape: true });
+  }
+}
+
+function startHeartbeat() {
+  if (heartbeatTimer) return;
+  heartbeatTimer = setInterval(() => {
+    diagnostics.logHeartbeat(hookState());
+  }, 15000);
+}
+
+function stopHeartbeat() {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
   }
 }
 
@@ -206,18 +272,23 @@ function startSelectionMonitor(callbacks) {
   onMouseDownCallback = savedCallbacks.onMouseDown;
   onDismissCallback = savedCallbacks.onDismiss;
 
-  createAndStartHook();
+  diagnostics.log('monitor starting', hookState());
+  createAndStartHook('initial');
+  startHeartbeat();
 
   if (process.platform === 'win32') {
-    focusMonitor.startFocusMonitor((nextProcess) => {
-      recreateSelectionHook(`leave webview2 -> ${nextProcess}`);
-    });
+    focusMonitor.startFocusMonitor();
   }
 }
 
 function stopSelectionMonitor() {
+  stopHeartbeat();
+  if (probeTimer) {
+    clearTimeout(probeTimer);
+    probeTimer = null;
+  }
   focusMonitor.stopFocusMonitor();
-  detachHook();
+  detachHook('stop');
   savedCallbacks = null;
   onSelectionCallback = null;
   onMouseDownCallback = null;
@@ -226,10 +297,12 @@ function stopSelectionMonitor() {
 
 function setMonitorEnabled(value) {
   enabled = value;
+  diagnostics.log('monitor enabled changed', { enabled, ...hookState() });
 }
 
 function suppressCapture(ms = 600) {
   suppressUntil = Date.now() + ms;
+  diagnostics.log('monitor suppress', { ms, until: suppressUntil });
 }
 
 function isAccessibilityTrusted() {
@@ -239,10 +312,20 @@ function isAccessibilityTrusted() {
   return true;
 }
 
+function getDiagnosticsPath() {
+  return diagnostics.getLogPath();
+}
+
+function markReproStart(label) {
+  diagnostics.markReproStart(label);
+}
+
 module.exports = {
   startSelectionMonitor,
   stopSelectionMonitor,
   setMonitorEnabled,
   suppressCapture,
   isAccessibilityTrusted,
+  getDiagnosticsPath,
+  markReproStart,
 };

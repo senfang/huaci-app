@@ -16,6 +16,7 @@ const { toElectronPoint } = require('./coordinates');
 const windows = require('./windows');
 const loginItem = require('./login-item');
 const globalShortcuts = require('./global-shortcuts');
+const diagnostics = require('./selection-diagnostics');
 const { getTrayIcon, getAppIcon } = require('./icons');
 
 let tray = null;
@@ -54,6 +55,22 @@ function buildTrayMenu() {
     },
     { type: 'separator' },
     {
+      label: '标记：开始复现',
+      click: () => {
+        selection.markReproStart?.('tray menu');
+      },
+    },
+    {
+      label: '打开诊断日志',
+      click: () => {
+        const logPath = selection.getDiagnosticsPath?.();
+        if (logPath) {
+          shell.showItemInFolder(logPath);
+        }
+      },
+    },
+    { type: 'separator' },
+    {
       label: '退出',
       click: () => app.quit(),
     },
@@ -72,10 +89,24 @@ function createTray() {
 }
 
 function handleSelection({ text, x, y, rect }) {
-  if (!config.getConfig().selectionEnabled) return;
+  if (!config.getConfig().selectionEnabled) {
+    diagnostics.log('main skipped', { reason: 'selectionEnabled false' });
+    return;
+  }
   pendingSelectedText = text;
   const buttons = config.getEnabledToolbarButtons();
-  if (!buttons.length) return;
+  if (!buttons.length) {
+    diagnostics.log('main skipped', { reason: 'no toolbar buttons' });
+    return;
+  }
+
+  diagnostics.log('main showToolbar', {
+    textPreview: text.slice(0, 40),
+    x,
+    y,
+    hasRect: !!rect,
+  });
+  diagnostics.mark('main-showToolbar');
 
   windows.hideToolbar();
   windows.showToolbar({ text, x, y, rect, buttons });
@@ -265,6 +296,7 @@ app.whenReady().then(() => {
   createTray();
   registerIpc();
   promptAccessibility();
+  diagnostics.log('app ready', { platform: process.platform, version: app.getVersion() });
 
   const cfg = config.getConfig();
   selection.setMonitorEnabled(cfg.selectionEnabled !== false);
