@@ -63,35 +63,26 @@ function getScreenCenterPoint() {
 }
 
 function normalizeKeyboardAnchor() {
-  const cursor = getCursorPoint();
-  if (isPointInWorkArea(cursor.x, cursor.y)) {
-    return { x: cursor.x, y: cursor.y, rect: null };
-  }
   return getScreenCenterPoint();
 }
 
 function normalizeAnchor(anchor) {
   if (!anchor) {
-    const cursor = getCursorPoint();
-    return { x: cursor.x, y: cursor.y, rect: null };
+    return getScreenCenterPoint();
   }
 
   const point = toElectronPoint({ x: anchor.x, y: anchor.y });
-  let rect = anchor.rect ? toElectronRect(anchor.rect) : null;
-
-  if (rect) {
-    const anchorX = (rect.left + rect.right) / 2;
-    if (!isPointInWorkArea(anchorX, rect.top)) {
-      rect = null;
-    }
+  if (point && point.x === 0 && point.y === 0) {
+    return getScreenCenterPoint();
+  }
+  if (point && isPointInWorkArea(point.x, point.y)) {
+    return { x: point.x, y: point.y, rect: null };
+  }
+  if (point && isPointOnScreen(point.x, point.y)) {
+    return { x: point.x, y: point.y, rect: null };
   }
 
-  if (!point || !isPointOnScreen(point.x, point.y)) {
-    const cursor = getCursorPoint();
-    return { x: cursor.x, y: cursor.y, rect: null };
-  }
-
-  return { x: point.x, y: point.y, rect };
+  return getScreenCenterPoint();
 }
 
 module.exports = {
@@ -102,4 +93,5 @@ module.exports = {
   getCursorPoint,
   getScreenCenterPoint,
   isPointInWorkArea,
+  isPointOnScreen,
 };

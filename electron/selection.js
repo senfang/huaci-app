@@ -1,13 +1,19 @@
 const SelectionHook = require('selection-hook');
-const { normalizeAnchor, normalizeKeyboardAnchor, isPointInWorkArea, toElectronPoint } = require('./coordinates');
+const {
+  normalizeAnchor,
+  normalizeKeyboardAnchor,
+  isPointOnScreen,
+  toElectronPoint,
+} = require('./coordinates');
 const focusMonitor = require('./focus-monitor');
 const diagnostics = require('./selection-diagnostics');
 const windows = require('./windows');
 const config = require('./app-config');
 
 const MIN_LENGTH = 1;
-const LONG_SELECTION_CHARS = 500;
 const KEYBOARD_FETCH_DELAY_MS = 120;
+const DRAG_FETCH_DELAY_MS = 120;
+const SELF_APP_IDS = ['com.surspark.huaci'];
 const { PositionLevel, INVALID_COORDINATE } = SelectionHook;
 
 let hook = null;
@@ -19,8 +25,13 @@ let onMouseDownCallback = null;
 let onDismissCallback = null;
 let heartbeatTimer = null;
 let lastMouseDown = null;
+let lastMouseUp = null;
+let lastDragStart = null;
+let lastDragEnd = null;
 let probeTimer = null;
+let dragFetchTimer = null;
 let keyboardFetchTimer = null;
+let selectionSinceMouseDown = false;
 let lastAcceptedText = '';
 let lastAcceptedAt = 0;
 
@@ -88,7 +99,7 @@ function createAndStartHook(reason) {
   hook = new SelectionHook();
   attachHookListeners();
 
-  hook.setGlobalFilterMode(SelectionHook.FilterMode.EXCLUDE_LIST, ['Electron']);
+  hook.setGlobalFilterMode(SelectionHook.FilterMode.EXCLUDE_LIST, SELF_APP_IDS);
 
   const startConfig = {
     debug: true,
@@ -109,12 +120,52 @@ function isValidCoord(value) {
   );
 }
 
+function toUsablePoint(point, posLevel = PositionLevel.NONE) {
+  if (!point || !isValidCoord(point.x) || !isValidCoord(point.y)) return null;
+  // selection-hook fills missing AX coords with (0,0); that is on-screen but not real.
+  if (posLevel < PositionLevel.SEL_FULL && point.x === 0 && point.y === 0) return null;
+  const dip = toElectronPoint(point);
+  if (!dip || !isPointOnScreen(dip.x, dip.y)) return null;
+  return dip;
+}
+
+function pickMouseSelectionEnd(data) {
+  const posLevel = data?.posLevel ?? PositionLevel.NONE;
+  const start = toUsablePoint(data.mousePosStart, posLevel);
+  const end = toUsablePoint(data.mousePosEnd, posLevel);
+  if (start && end) {
+    if (Math.abs(end.x - start.x) >= Math.abs(end.y - start.y)) {
+      return end.x >= start.x ? end : start;
+    }
+    return end.y >= start.y ? end : start;
+  }
+  return end || start;
+}
+
+function enrichDragPoints(data) {
+  if (!data) return data;
+  const posLevel = data?.posLevel ?? PositionLevel.NONE;
+  const enriched = { ...data };
+  if (!toUsablePoint(data.mousePosEnd, posLevel) && lastDragEnd) {
+    enriched.mousePosEnd = { ...lastDragEnd };
+  }
+  if (!toUsablePoint(data.mousePosStart, posLevel) && lastDragStart) {
+    enriched.mousePosStart = { ...lastDragStart };
+  }
+  return enriched;
+}
+
 function isValidPoint(point) {
-  return point && isValidCoord(point.x) && isValidCoord(point.y);
+  return !!toUsablePoint(point);
 }
 
 function getSelectionRect(data) {
-  const points = [data.startTop, data.startBottom, data.endTop, data.endBottom].filter(isValidPoint);
+  const posLevel = data?.posLevel ?? PositionLevel.NONE;
+  if (posLevel < PositionLevel.SEL_FULL) return null;
+
+  const points = [data.startTop, data.startBottom, data.endTop, data.endBottom]
+    .map((point) => toUsablePoint(point, posLevel))
+    .filter(Boolean);
   if (points.length < 2) return null;
 
   const xs = points.map((p) => p.x);
@@ -137,40 +188,33 @@ function getMaxSelectionLength() {
   return config.getConfig().selectionMaxLength ?? 50000;
 }
 
-function getSelectionAnchor(data, textLength = 0) {
-  const mouseEnd = isValidPoint(data.mousePosEnd) ? data.mousePosEnd : null;
-  const rect = getSelectionRect(data);
-  const rectAnchorX = rect ? (rect.left + rect.right) / 2 : null;
-  const rectTopDip = rect ? toElectronPoint({ x: rectAnchorX, y: rect.top }) : null;
-  const preferMouseEnd =
-    mouseEnd &&
-    (textLength > LONG_SELECTION_CHARS ||
-      (rectTopDip && !isPointInWorkArea(rectTopDip.x, rectTopDip.y)));
-
-  if (preferMouseEnd) {
-    return { x: mouseEnd.x, y: mouseEnd.y, rect: null };
+function getSelectionAnchor(data, source = 'mouse') {
+  if (source === 'ctrl+a') {
+    return null;
   }
 
-  const posLevel = data.posLevel ?? PositionLevel.NONE;
+  const posLevel = data?.posLevel ?? PositionLevel.NONE;
 
   if (posLevel >= PositionLevel.SEL_FULL) {
+    const endPoint =
+      toUsablePoint(data.endBottom, posLevel) || toUsablePoint(data.endTop, posLevel);
+    if (endPoint) {
+      return { x: endPoint.x, y: endPoint.y, rect: null };
+    }
+
+    const rect = getSelectionRect(data);
     if (rect) {
       return {
-        x: (rect.left + rect.right) / 2,
-        y: rect.top,
-        rect,
+        x: rect.right,
+        y: Math.round((rect.top + rect.bottom) / 2),
+        rect: null,
       };
-    }
-    if (isValidPoint(data.endBottom)) {
-      return { x: data.endBottom.x, y: data.endBottom.y, rect: null };
     }
   }
 
+  const mouseEnd = pickMouseSelectionEnd(data);
   if (mouseEnd) {
     return { x: mouseEnd.x, y: mouseEnd.y, rect: null };
-  }
-  if (isValidPoint(data.mousePosStart)) {
-    return { x: data.mousePosStart.x, y: data.mousePosStart.y, rect: null };
   }
 
   return null;
@@ -194,8 +238,38 @@ function dragDistance(start, end) {
   return Math.sqrt(dx * dx + dy * dy);
 }
 
+function isSelfProgram(programName = '') {
+  const program = programName.toLowerCase();
+  return SELF_APP_IDS.some((id) => program === id.toLowerCase());
+}
+
+function withMouseAnchor(data) {
+  return enrichDragPoints(data);
+}
+
+function fetchSelectionAfterDrag(reason) {
+  if (!hook?.isRunning() || selectionSinceMouseDown) return;
+
+  let selection = null;
+  try {
+    selection = hook.getCurrentSelection();
+  } catch (err) {
+    diagnostics.log('drag selection failed', {
+      reason,
+      message: err?.message || String(err),
+      ...hookState(),
+    });
+  }
+
+  if (selection?.text?.trim()) {
+    processSelectionData(withMouseAnchor(selection), 'drag-fetch');
+  } else {
+    diagnostics.log('drag selection empty', { reason, ...hookState() });
+  }
+}
+
 function scheduleSelectionProbe(reason) {
-  if (process.platform !== 'win32' || !hook?.isRunning()) return;
+  if (!hook?.isRunning()) return;
   if (probeTimer) clearTimeout(probeTimer);
   probeTimer = setTimeout(() => {
     probeTimer = null;
@@ -204,6 +278,13 @@ function scheduleSelectionProbe(reason) {
       diagnostics.log('probe getCurrentSelection', {
         reason,
         ok: !!(probe?.text?.trim()),
+        hadTextSelectionEvent: selectionSinceMouseDown,
+        gap:
+          probe?.text?.trim() && !selectionSinceMouseDown
+            ? 'hook-missed-but-probe-ok'
+            : probe?.text?.trim()
+              ? 'both-ok'
+              : 'both-fail',
         textLen: probe?.text?.trim()?.length || 0,
         program: probe?.programName || '',
         method: probe?.method,
@@ -218,6 +299,15 @@ function scheduleSelectionProbe(reason) {
       });
     }
   }, 180);
+}
+
+function scheduleDragSelectionFetch(reason) {
+  if (!hook?.isRunning()) return;
+  if (dragFetchTimer) clearTimeout(dragFetchTimer);
+  dragFetchTimer = setTimeout(() => {
+    dragFetchTimer = null;
+    fetchSelectionAfterDrag(reason);
+  }, DRAG_FETCH_DELAY_MS);
 }
 
 function processSelectionData(data, source = 'mouse') {
@@ -256,7 +346,7 @@ function processSelectionData(data, source = 'mouse') {
   }
 
   const program = (data.programName || '').toLowerCase();
-  if (program.includes('electron') || program.includes('huaci')) {
+  if (isSelfProgram(program)) {
     diagnostics.log('selection skipped', { reason: 'self app', program, ...hookState() });
     return;
   }
@@ -270,7 +360,7 @@ function processSelectionData(data, source = 'mouse') {
   const anchor =
     source === 'ctrl+a'
       ? normalizeKeyboardAnchor()
-      : normalizeAnchor(getSelectionAnchor(data, text.length));
+      : normalizeAnchor(getSelectionAnchor(enrichDragPoints(data), source));
   lastAcceptedText = text;
   lastAcceptedAt = now;
 
@@ -292,6 +382,7 @@ function processSelectionData(data, source = 'mouse') {
 }
 
 function handleSelection(data) {
+  selectionSinceMouseDown = true;
   processSelectionData(data, 'mouse');
 }
 
@@ -319,7 +410,9 @@ function scheduleKeyboardSelectionFetch(reason) {
 
 function handleMouseDown(data) {
   diagnostics.count('mouse-down');
-  lastMouseDown = { x: data?.x, y: data?.y, t: Date.now() };
+  selectionSinceMouseDown = false;
+  lastDragStart = data?.x != null ? { x: data.x, y: data.y } : null;
+  lastMouseDown = lastDragStart ? { ...lastDragStart, t: Date.now() } : null;
   if (!enabled) return;
   if (Date.now() < suppressUntil) return;
   onMouseDownCallback?.(data);
@@ -327,9 +420,13 @@ function handleMouseDown(data) {
 
 function handleMouseUp(data) {
   diagnostics.count('mouse-up');
+  lastDragEnd = data?.x != null ? { x: data.x, y: data.y } : null;
+  lastMouseUp = lastDragEnd;
   const distance = dragDistance(lastMouseDown, data);
-  if (distance >= 8) {
-    scheduleSelectionProbe(`mouse-up drag=${Math.round(distance)}`);
+  if (distance >= 8 && enabled && Date.now() >= suppressUntil) {
+    const reason = `mouse-up drag=${Math.round(distance)}`;
+    scheduleSelectionProbe(reason);
+    scheduleDragSelectionFetch(reason);
   }
   lastMouseDown = null;
 }
@@ -387,6 +484,10 @@ function stopSelectionMonitor() {
   if (probeTimer) {
     clearTimeout(probeTimer);
     probeTimer = null;
+  }
+  if (dragFetchTimer) {
+    clearTimeout(dragFetchTimer);
+    dragFetchTimer = null;
   }
   if (keyboardFetchTimer) {
     clearTimeout(keyboardFetchTimer);
