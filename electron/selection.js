@@ -1,4 +1,5 @@
 const SelectionHook = require('selection-hook');
+const { normalizeAnchor, toElectronPoint } = require('./coordinates');
 
 const MIN_LENGTH = 1;
 const MAX_LENGTH = 2000;
@@ -93,9 +94,13 @@ function handleSelection(data) {
   if (program.includes('electron') || program.includes('huaci')) return;
 
   const anchor = getSelectionAnchor(data);
-  if (!anchor) return;
-
-  onSelectionCallback({ text, x: anchor.x, y: anchor.y, rect: anchor.rect });
+  const normalized = normalizeAnchor(anchor);
+  onSelectionCallback({
+    text,
+    x: normalized.x,
+    y: normalized.y,
+    rect: normalized.rect,
+  });
 }
 
 function handleMouseDown(data) {

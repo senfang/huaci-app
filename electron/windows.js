@@ -146,17 +146,18 @@ function showToolbar(payload) {
   const anchorX = rect ? (rect.left + rect.right) / 2 : x;
   const anchorY = rect ? rect.top : y;
   const display = screen.getDisplayNearestPoint({ x: anchorX, y: anchorY });
-  const bounds = display.bounds;
+  const area = display.workArea;
 
   const showAt = () => {
     const [width, height] = win.getSize();
     let left = Math.round(anchorX - width / 2);
     let top = Math.round(anchorY - height - 12);
 
-    left = Math.max(bounds.x + 8, Math.min(left, bounds.x + bounds.width - width - 8));
-    if (top < bounds.y + 8) {
+    left = Math.max(area.x + 8, Math.min(left, area.x + area.width - width - 8));
+    if (top < area.y + 8) {
       top = Math.round((rect ? rect.bottom : anchorY) + 16);
     }
+    top = Math.max(area.y + 8, Math.min(top, area.y + area.height - height - 8));
 
     win.setBounds({ x: left, y: top, width, height }, false);
     win.showInactive();

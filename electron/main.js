@@ -12,6 +12,7 @@ const {
 const config = require('./app-config');
 const { runDifyWorkflow } = require('./dify');
 const selection = require('./selection');
+const { toElectronPoint } = require('./coordinates');
 const windows = require('./windows');
 const loginItem = require('./login-item');
 const globalShortcuts = require('./global-shortcuts');
@@ -82,7 +83,10 @@ function handleSelection({ text, x, y, rect }) {
 
 function handleMouseDown({ x, y }) {
   if (windows.isDialogVisible()) return;
-  if (x != null && y != null && windows.isPointInToolbar(x, y)) return;
+  if (x != null && y != null) {
+    const point = toElectronPoint({ x, y });
+    if (point && windows.isPointInToolbar(point.x, point.y)) return;
+  }
   windows.hideToolbar();
 }
 
