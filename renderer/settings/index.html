@@ -40,6 +40,11 @@
         <input type="checkbox" id="launchAtLogin" />
       </label>
       <div class="field shortcut-field">
+        <label for="selectionMaxLength">选区字数上限</label>
+        <input type="number" id="selectionMaxLength" class="number-input" min="1" max="500000" step="1000" />
+        <span class="hint">超过此字数的选区不会弹出工具栏，默认 50000。复制与 AI 解读仍受 Dify 接口限制。</span>
+      </div>
+      <div class="field shortcut-field">
         <label for="settingsShortcut">打开设置快捷键</label>
         <input type="text" id="settingsShortcut" class="shortcut-input" readonly placeholder="点击后按下快捷键" />
         <span class="hint">默认 Ctrl + ] ，点击输入框后按下新的组合键即可修改</span>

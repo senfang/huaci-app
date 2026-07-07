@@ -34,6 +34,7 @@ const store = new Store({
       },
     ],
     selectionEnabled: true,
+    selectionMaxLength: 50000,
     launchAtLogin: false,
     settingsShortcut: 'Control+]',
   },
@@ -47,12 +48,23 @@ function normalizeSettingsShortcut(value) {
   return value || 'Control+]';
 }
 
+function normalizeSelectionMaxLength(value) {
+  const n = Number.parseInt(value, 10);
+  if (!Number.isFinite(n) || n < 1) return 50000;
+  return Math.min(n, 500000);
+}
+
 function getConfig() {
   const data = store.store;
   const normalized = normalizeSettingsShortcut(data.settingsShortcut);
   if (normalized !== data.settingsShortcut) {
     store.set('settingsShortcut', normalized);
     data.settingsShortcut = normalized;
+  }
+  const maxLen = normalizeSelectionMaxLength(data.selectionMaxLength);
+  if (maxLen !== data.selectionMaxLength) {
+    store.set('selectionMaxLength', maxLen);
+    data.selectionMaxLength = maxLen;
   }
   return data;
 }
@@ -66,6 +78,9 @@ function getDifyProfile(id) {
 }
 
 function saveConfig(partial) {
+  if ('selectionMaxLength' in partial) {
+    partial.selectionMaxLength = normalizeSelectionMaxLength(partial.selectionMaxLength);
+  }
   for (const [key, value] of Object.entries(partial)) {
     store.set(key, value);
   }
@@ -160,4 +175,5 @@ module.exports = {
   updateToolbarButton,
   deleteToolbarButton,
   reorderToolbarButtons,
+  normalizeSelectionMaxLength,
 };

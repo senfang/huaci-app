@@ -244,6 +244,7 @@ function collectFormData() {
     toolbarButtons: buttons,
     launchAtLogin: document.getElementById('launchAtLogin').checked,
     selectionEnabled: document.getElementById('selectionEnabled').checked,
+    selectionMaxLength: Number.parseInt(document.getElementById('selectionMaxLength').value, 10),
     settingsShortcut: config.settingsShortcut || 'Control+]',
   };
 }
@@ -252,6 +253,7 @@ async function load() {
   config = await window.huaci.getConfig();
   document.getElementById('launchAtLogin').checked = !!config.launchAtLogin;
   document.getElementById('selectionEnabled').checked = config.selectionEnabled !== false;
+  document.getElementById('selectionMaxLength').value = String(config.selectionMaxLength ?? 50000);
   document.getElementById('settingsShortcut').value = formatAccelerator(
     config.settingsShortcut || 'Control+]'
   );

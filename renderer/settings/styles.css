@@ -91,7 +91,8 @@ body {
   margin-bottom: 8px;
 }
 
-.shortcut-input {
+.shortcut-input,
+.number-input {
   width: 100%;
   max-width: 280px;
   padding: 10px 12px;
@@ -103,10 +104,16 @@ body {
   cursor: pointer;
 }
 
-.shortcut-input:focus {
+.shortcut-input:focus,
+.number-input:focus {
   outline: none;
   border-color: #6366f1;
   box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+}
+
+.number-input {
+  cursor: text;
+  font-family: inherit;
 }
 
 .shortcut-input.recording {

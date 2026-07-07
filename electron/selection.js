@@ -1,11 +1,13 @@
 const SelectionHook = require('selection-hook');
-const { normalizeAnchor } = require('./coordinates');
+const { normalizeAnchor, isPointInWorkArea, toElectronPoint } = require('./coordinates');
 const focusMonitor = require('./focus-monitor');
 const diagnostics = require('./selection-diagnostics');
 const windows = require('./windows');
+const config = require('./app-config');
 
 const MIN_LENGTH = 1;
-const MAX_LENGTH = 2000;
+const LONG_SELECTION_CHARS = 500;
+const KEYBOARD_FETCH_DELAY_MS = 120;
 const { PositionLevel, INVALID_COORDINATE } = SelectionHook;
 
 let hook = null;
@@ -18,6 +20,9 @@ let onDismissCallback = null;
 let heartbeatTimer = null;
 let lastMouseDown = null;
 let probeTimer = null;
+let keyboardFetchTimer = null;
+let lastAcceptedText = '';
+let lastAcceptedAt = 0;
 
 function hookState() {
   return {
@@ -34,6 +39,7 @@ function attachHookListeners() {
   hook.on('mouse-down', handleMouseDown);
   hook.on('mouse-up', handleMouseUp);
   hook.on('key-down', handleKeyDown);
+  hook.on('key-up', handleKeyUp);
   hook.on('status', (status) => {
     diagnostics.log('hook status', { status, ...hookState() });
   });
@@ -127,11 +133,27 @@ function getSelectionRect(data) {
   return rect;
 }
 
-function getSelectionAnchor(data) {
+function getMaxSelectionLength() {
+  return config.getConfig().selectionMaxLength ?? 50000;
+}
+
+function getSelectionAnchor(data, textLength = 0) {
+  const mouseEnd = isValidPoint(data.mousePosEnd) ? data.mousePosEnd : null;
+  const rect = getSelectionRect(data);
+  const rectAnchorX = rect ? (rect.left + rect.right) / 2 : null;
+  const rectTopDip = rect ? toElectronPoint({ x: rectAnchorX, y: rect.top }) : null;
+  const preferMouseEnd =
+    mouseEnd &&
+    (textLength > LONG_SELECTION_CHARS ||
+      (rectTopDip && !isPointInWorkArea(rectTopDip.x, rectTopDip.y)));
+
+  if (preferMouseEnd) {
+    return { x: mouseEnd.x, y: mouseEnd.y, rect: null };
+  }
+
   const posLevel = data.posLevel ?? PositionLevel.NONE;
 
   if (posLevel >= PositionLevel.SEL_FULL) {
-    const rect = getSelectionRect(data);
     if (rect) {
       return {
         x: (rect.left + rect.right) / 2,
@@ -144,8 +166,8 @@ function getSelectionAnchor(data) {
     }
   }
 
-  if (posLevel >= PositionLevel.MOUSE_SINGLE && isValidPoint(data.mousePosEnd)) {
-    return { x: data.mousePosEnd.x, y: data.mousePosEnd.y, rect: null };
+  if (mouseEnd) {
+    return { x: mouseEnd.x, y: mouseEnd.y, rect: null };
   }
   if (isValidPoint(data.mousePosStart)) {
     return { x: data.mousePosStart.x, y: data.mousePosStart.y, rect: null };
@@ -198,9 +220,9 @@ function scheduleSelectionProbe(reason) {
   }, 180);
 }
 
-function handleSelection(data) {
+function processSelectionData(data, source = 'mouse') {
   diagnostics.mark('text-selection');
-  diagnostics.log('event text-selection', summarizeSelection(data));
+  diagnostics.log('event text-selection', { source, ...summarizeSelection(data) });
 
   if (!enabled) {
     diagnostics.log('selection skipped', { reason: 'monitor disabled', ...hookState() });
@@ -221,9 +243,15 @@ function handleSelection(data) {
   }
 
   const text = data.text.trim();
-  if (text.length < MIN_LENGTH || text.length > MAX_LENGTH) {
+  const maxLength = getMaxSelectionLength();
+  if (text.length < MIN_LENGTH || text.length > maxLength) {
     onDismissCallback?.();
-    diagnostics.log('selection skipped', { reason: 'invalid length', len: text.length, ...hookState() });
+    diagnostics.log('selection skipped', {
+      reason: 'invalid length',
+      len: text.length,
+      maxLength,
+      ...hookState(),
+    });
     return;
   }
 
@@ -233,11 +261,21 @@ function handleSelection(data) {
     return;
   }
 
-  const anchor = getSelectionAnchor(data);
+  const now = Date.now();
+  if (text === lastAcceptedText && now - lastAcceptedAt < 400) {
+    diagnostics.log('selection skipped', { reason: 'duplicate', ...hookState() });
+    return;
+  }
+
+  const anchor = getSelectionAnchor(data, text.length);
   const normalized = normalizeAnchor(anchor);
+  lastAcceptedText = text;
+  lastAcceptedAt = now;
+
   diagnostics.mark('selection-accepted');
   diagnostics.log('selection accepted', {
     program,
+    source,
     textPreview: text.slice(0, 40),
     anchor: normalized,
     ...hookState(),
@@ -249,6 +287,32 @@ function handleSelection(data) {
     y: normalized.y,
     rect: normalized.rect,
   });
+}
+
+function handleSelection(data) {
+  processSelectionData(data, 'mouse');
+}
+
+function scheduleKeyboardSelectionFetch(reason) {
+  if (!hook?.isRunning()) return;
+  if (keyboardFetchTimer) clearTimeout(keyboardFetchTimer);
+  keyboardFetchTimer = setTimeout(() => {
+    keyboardFetchTimer = null;
+    try {
+      const selection = hook.getCurrentSelection();
+      if (selection?.text?.trim()) {
+        processSelectionData(selection, reason);
+      } else {
+        diagnostics.log('keyboard selection empty', { reason, ...hookState() });
+      }
+    } catch (err) {
+      diagnostics.log('keyboard selection failed', {
+        reason,
+        message: err?.message || String(err),
+        ...hookState(),
+      });
+    }
+  }, KEYBOARD_FETCH_DELAY_MS);
 }
 
 function handleMouseDown(data) {
@@ -272,6 +336,19 @@ function handleKeyDown(data) {
   if (data?.uniKey === 'Escape') {
     onDismissCallback?.({ escape: true });
   }
+}
+
+function isSelectAllKeyUp(data) {
+  if (!data?.sys) return false;
+  const key = (data.uniKey || '').toLowerCase();
+  return key === 'a';
+}
+
+function handleKeyUp(data) {
+  if (!enabled || Date.now() < suppressUntil) return;
+  if (!isSelectAllKeyUp(data)) return;
+  diagnostics.log('keyboard select-all', { uniKey: data.uniKey, ...hookState() });
+  scheduleKeyboardSelectionFetch('ctrl+a');
 }
 
 function startHeartbeat() {
@@ -308,6 +385,10 @@ function stopSelectionMonitor() {
   if (probeTimer) {
     clearTimeout(probeTimer);
     probeTimer = null;
+  }
+  if (keyboardFetchTimer) {
+    clearTimeout(keyboardFetchTimer);
+    keyboardFetchTimer = null;
   }
   focusMonitor.stopFocusMonitor();
   detachHook('stop');

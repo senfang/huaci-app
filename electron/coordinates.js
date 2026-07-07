@@ -43,6 +43,14 @@ function getCursorPoint() {
   return screen.getCursorScreenPoint();
 }
 
+function isPointInWorkArea(x, y) {
+  if (x == null || y == null) return false;
+  return screen.getAllDisplays().some((display) => {
+    const wa = display.workArea;
+    return x >= wa.x && x <= wa.x + wa.width && y >= wa.y && y <= wa.y + wa.height;
+  });
+}
+
 function normalizeAnchor(anchor) {
   if (!anchor) {
     const cursor = getCursorPoint();
@@ -50,7 +58,14 @@ function normalizeAnchor(anchor) {
   }
 
   const point = toElectronPoint({ x: anchor.x, y: anchor.y });
-  const rect = anchor.rect ? toElectronRect(anchor.rect) : null;
+  let rect = anchor.rect ? toElectronRect(anchor.rect) : null;
+
+  if (rect) {
+    const anchorX = (rect.left + rect.right) / 2;
+    if (!isPointInWorkArea(anchorX, rect.top)) {
+      rect = null;
+    }
+  }
 
   if (!point || !isPointOnScreen(point.x, point.y)) {
     const cursor = getCursorPoint();
@@ -65,4 +80,5 @@ module.exports = {
   toElectronRect,
   normalizeAnchor,
   getCursorPoint,
+  isPointInWorkArea,
 };
