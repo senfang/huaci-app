@@ -1,5 +1,5 @@
 const SelectionHook = require('selection-hook');
-const { normalizeAnchor, isPointInWorkArea, toElectronPoint } = require('./coordinates');
+const { normalizeAnchor, normalizeKeyboardAnchor, isPointInWorkArea, toElectronPoint } = require('./coordinates');
 const focusMonitor = require('./focus-monitor');
 const diagnostics = require('./selection-diagnostics');
 const windows = require('./windows');
@@ -267,8 +267,10 @@ function processSelectionData(data, source = 'mouse') {
     return;
   }
 
-  const anchor = getSelectionAnchor(data, text.length);
-  const normalized = normalizeAnchor(anchor);
+  const anchor =
+    source === 'ctrl+a'
+      ? normalizeKeyboardAnchor()
+      : normalizeAnchor(getSelectionAnchor(data, text.length));
   lastAcceptedText = text;
   lastAcceptedAt = now;
 
@@ -277,15 +279,15 @@ function processSelectionData(data, source = 'mouse') {
     program,
     source,
     textPreview: text.slice(0, 40),
-    anchor: normalized,
+    anchor,
     ...hookState(),
   });
 
   onSelectionCallback({
     text,
-    x: normalized.x,
-    y: normalized.y,
-    rect: normalized.rect,
+    x: anchor.x,
+    y: anchor.y,
+    rect: anchor.rect,
   });
 }
 

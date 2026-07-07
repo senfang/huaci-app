@@ -51,6 +51,25 @@ function isPointInWorkArea(x, y) {
   });
 }
 
+function getScreenCenterPoint() {
+  const cursor = getCursorPoint();
+  const display = screen.getDisplayNearestPoint(cursor);
+  const wa = display.workArea;
+  return {
+    x: Math.round(wa.x + wa.width / 2),
+    y: Math.round(wa.y + wa.height / 2),
+    rect: null,
+  };
+}
+
+function normalizeKeyboardAnchor() {
+  const cursor = getCursorPoint();
+  if (isPointInWorkArea(cursor.x, cursor.y)) {
+    return { x: cursor.x, y: cursor.y, rect: null };
+  }
+  return getScreenCenterPoint();
+}
+
 function normalizeAnchor(anchor) {
   if (!anchor) {
     const cursor = getCursorPoint();
@@ -79,6 +98,8 @@ module.exports = {
   toElectronPoint,
   toElectronRect,
   normalizeAnchor,
+  normalizeKeyboardAnchor,
   getCursorPoint,
+  getScreenCenterPoint,
   isPointInWorkArea,
 };
