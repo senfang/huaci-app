@@ -23,6 +23,7 @@ Write-Output $p.ProcessName
 let pollTimer = null;
 let polling = false;
 let lastForeground = '';
+let onForegroundChange = null;
 
 function queryForegroundProcess() {
   return new Promise((resolve) => {
@@ -52,8 +53,9 @@ function classifyProcess(name) {
   return 'other';
 }
 
-function startFocusMonitor() {
+function startFocusMonitor(callback) {
   if (process.platform !== 'win32' || pollTimer) return;
+  onForegroundChange = typeof callback === 'function' ? callback : null;
 
   pollTimer = setInterval(async () => {
     if (polling) return;
@@ -62,15 +64,20 @@ function startFocusMonitor() {
       const current = await queryForegroundProcess();
       if (!current || current === lastForeground) return;
 
-      const fromClass = classifyProcess(lastForeground);
+      const from = lastForeground;
+      const fromClass = classifyProcess(from);
       const toClass = classifyProcess(current);
       diagnostics.logPhase('foreground-changed', {
-        from: lastForeground || null,
+        from: from || null,
         to: current,
         fromClass,
         toClass,
       });
       lastForeground = current;
+
+      if (onForegroundChange) {
+        onForegroundChange({ from, to: current, fromClass, toClass });
+      }
     } finally {
       polling = false;
     }
@@ -84,6 +91,7 @@ function stopFocusMonitor() {
   }
   polling = false;
   lastForeground = '';
+  onForegroundChange = null;
 }
 
 function getLastForeground() {

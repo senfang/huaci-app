@@ -1,8 +1,10 @@
 const { BrowserWindow, screen } = require('electron');
 const path = require('path');
 const { getAppIcon } = require('./icons');
+const diagnostics = require('./selection-diagnostics');
 
 let toolbarWindow = null;
+let toolbarNeedsRecreate = false;
 let dialogWindow = null;
 let settingsWindow = null;
 
@@ -14,22 +16,41 @@ function getRendererHtml(name) {
   return path.join(__dirname, '..', 'renderer', name, 'index.html');
 }
 
-function createToolbarWindow() {
-  if (toolbarWindow && !toolbarWindow.isDestroyed()) return toolbarWindow;
+function destroyToolbarWindow() {
+  if (toolbarWindow && !toolbarWindow.isDestroyed()) {
+    toolbarWindow.destroy();
+  }
+  toolbarWindow = null;
+}
 
+function markToolbarNeedsRecreate(reason) {
+  toolbarNeedsRecreate = true;
+  diagnostics.log('toolbar mark recreate', { reason });
+}
+
+function createToolbarWindow() {
+  if (toolbarWindow && !toolbarWindow.isDestroyed() && !toolbarNeedsRecreate) {
+    return toolbarWindow;
+  }
+
+  destroyToolbarWindow();
+  toolbarNeedsRecreate = false;
+
+  const isMac = process.platform === 'darwin';
   toolbarWindow = new BrowserWindow({
     width: 420,
     height: 52,
     show: false,
     frame: false,
     transparent: true,
+    backgroundColor: '#00000000',
     resizable: false,
     movable: false,
     focusable: false,
     skipTaskbar: true,
     alwaysOnTop: true,
     hasShadow: false,
-    type: process.platform === 'darwin' ? 'panel' : 'toolbar',
+    type: isMac ? 'panel' : 'normal',
     webPreferences: {
       preload: getPreload('toolbar'),
       contextIsolation: true,
@@ -38,6 +59,9 @@ function createToolbarWindow() {
   });
 
   toolbarWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  if (!isMac) {
+    toolbarWindow.setAlwaysOnTop(true, 'screen-saver');
+  }
   toolbarWindow.loadFile(getRendererHtml('toolbar'));
 
   toolbarWindow.on('closed', () => {
@@ -120,6 +144,11 @@ function hideToolbar() {
   }
 }
 
+function recreateToolbarAfterImageViewer() {
+  hideToolbar();
+  markToolbarNeedsRecreate('left-image-viewer');
+}
+
 function isToolbarVisible() {
   return !!(toolbarWindow && !toolbarWindow.isDestroyed() && toolbarWindow.isVisible());
 }
@@ -140,6 +169,10 @@ function isDialogVisible() {
 }
 
 function showToolbar(payload) {
+  if (process.platform === 'win32' && toolbarNeedsRecreate) {
+    destroyToolbarWindow();
+    toolbarNeedsRecreate = false;
+  }
   const win = createToolbarWindow();
   const { x, y, text, buttons, rect } = payload;
 
@@ -160,8 +193,19 @@ function showToolbar(payload) {
     top = Math.max(area.y + 8, Math.min(top, area.y + area.height - height - 8));
 
     win.setBounds({ x: left, y: top, width, height }, false);
+    if (process.platform !== 'darwin') {
+      win.setAlwaysOnTop(true, 'screen-saver');
+    }
     win.showInactive();
     win.webContents.send('toolbar:show', { text, buttons });
+
+    diagnostics.log('toolbar shown', {
+      bounds: win.getBounds(),
+      isVisible: win.isVisible(),
+      isDestroyed: win.isDestroyed(),
+      anchorX,
+      anchorY,
+    });
   };
 
   if (win.webContents.isLoading()) {
@@ -237,4 +281,6 @@ module.exports = {
   isToolbarVisible,
   isPointInToolbar,
   isDialogVisible,
+  recreateToolbarAfterImageViewer,
+  markToolbarNeedsRecreate,
 };

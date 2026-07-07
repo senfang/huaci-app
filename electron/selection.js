@@ -2,6 +2,7 @@ const SelectionHook = require('selection-hook');
 const { normalizeAnchor } = require('./coordinates');
 const focusMonitor = require('./focus-monitor');
 const diagnostics = require('./selection-diagnostics');
+const windows = require('./windows');
 
 const MIN_LENGTH = 1;
 const MAX_LENGTH = 2000;
@@ -54,6 +55,27 @@ function detachHook(reason) {
     diagnostics.log('hook detach failed', { message: err?.message || String(err) });
   }
   hook = null;
+}
+
+function recreateHook(reason) {
+  diagnostics.log('hook recreate', { reason, ...hookState() });
+  detachHook(reason);
+  createAndStartHook(reason);
+}
+
+function handleForegroundChange({ from, to, fromClass, toClass }) {
+  if (toClass === 'image-viewer-shell') {
+    windows.hideToolbar();
+    return;
+  }
+
+  if (fromClass === 'image-viewer-shell') {
+    diagnostics.log('recover after image viewer', { from, to, fromClass, toClass });
+    windows.recreateToolbarAfterImageViewer();
+    setTimeout(() => {
+      recreateHook('left-image-viewer');
+    }, 120);
+  }
 }
 
 function createAndStartHook(reason) {
@@ -277,7 +299,7 @@ function startSelectionMonitor(callbacks) {
   startHeartbeat();
 
   if (process.platform === 'win32') {
-    focusMonitor.startFocusMonitor();
+    focusMonitor.startFocusMonitor(handleForegroundChange);
   }
 }
 
