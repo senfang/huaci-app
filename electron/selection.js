@@ -1,5 +1,6 @@
 const SelectionHook = require('selection-hook');
-const { normalizeAnchor, toElectronPoint } = require('./coordinates');
+const { normalizeAnchor } = require('./coordinates');
+const focusMonitor = require('./focus-monitor');
 
 const MIN_LENGTH = 1;
 const MAX_LENGTH = 2000;
@@ -8,70 +9,88 @@ const { PositionLevel, INVALID_COORDINATE } = SelectionHook;
 let hook = null;
 let enabled = true;
 let suppressUntil = 0;
+let savedCallbacks = null;
 let onSelectionCallback = null;
 let onMouseDownCallback = null;
 let onDismissCallback = null;
-let awaitingSelectionAfterMouseDown = false;
-let restartTimer = null;
 
-const WIN_IMAGE_VIEWER_FILTER = [
-  'Microsoft.Photos',
-  'Microsoft.Photos.exe',
-  'Photos',
-  'Photos.exe',
-  'PhotoViewer',
-  'PhotoViewer.exe',
-  'MSPhotos',
-  // Windows 11「照片」等 UWP 图片查看器通过 WebView2 托管
-  'msedgewebview2',
+const WIN_CLIPBOARD_EXCLUDE = [
   'msedgewebview2.exe',
-  'MSEdgeWebView2',
   'MSEdgeWebView2.exe',
+  'Microsoft.Photos.exe',
+  'Photos.exe',
+  'PhotoViewer.exe',
+];
+
+const WIN_GLOBAL_EXCLUDE = [
+  'Electron',
+  'msedgewebview2.exe',
+  'MSEdgeWebView2.exe',
+  'Microsoft.Photos.exe',
+  'Photos.exe',
+  'PhotoViewer.exe',
 ];
 
 function isWebView2Process(programName) {
   return (programName || '').toLowerCase().includes('msedgewebview2');
 }
 
-function applyGlobalFilter() {
+function applyHookConfig() {
   if (!hook) return;
-  const exclude = ['Electron'];
+
+  hook.setGlobalFilterMode(SelectionHook.FilterMode.EXCLUDE_LIST, WIN_GLOBAL_EXCLUDE);
+
   if (process.platform === 'win32') {
-    exclude.push(...WIN_IMAGE_VIEWER_FILTER);
-  }
-  hook.setGlobalFilterMode(SelectionHook.FilterMode.EXCLUDE_LIST, exclude);
-}
-
-function cancelHookRestart() {
-  if (restartTimer) {
-    clearTimeout(restartTimer);
-    restartTimer = null;
+    hook.setClipboardMode(SelectionHook.FilterMode.EXCLUDE_LIST, WIN_CLIPBOARD_EXCLUDE);
   }
 }
 
-function restartHookIfNeeded() {
-  if (process.platform !== 'win32' || !hook) return;
+function attachHookListeners() {
+  hook.on('text-selection', handleSelection);
+  hook.on('mouse-down', handleMouseDown);
+  hook.on('key-down', handleKeyDown);
+  hook.on('error', (err) => {
+    console.error('[selection-hook]', err);
+  });
+}
 
-  cancelHookRestart();
+function detachHook() {
+  if (!hook) return;
   try {
+    hook.removeAllListeners();
     if (hook.isRunning()) {
       hook.stop();
     }
-    hook.start({ enableClipboard: true, debug: false });
-    applyGlobalFilter();
+    hook.cleanup();
   } catch (err) {
-    console.error('[selection-hook] restart failed', err);
+    console.error('[selection-hook] detach failed', err);
   }
+  hook = null;
 }
 
-function scheduleHookRestart(delay = 450) {
-  if (process.platform !== 'win32' || !hook) return;
-  cancelHookRestart();
-  restartTimer = setTimeout(() => {
-    restartTimer = null;
-    awaitingSelectionAfterMouseDown = false;
-    restartHookIfNeeded();
-  }, delay);
+function createAndStartHook() {
+  hook = new SelectionHook();
+  attachHookListeners();
+  applyHookConfig();
+
+  const startConfig = {
+    debug: false,
+    enableClipboard: process.platform !== 'win32',
+  };
+
+  const started = hook.start(startConfig);
+  if (!started) {
+    console.warn('[selection-hook] failed to start');
+  }
+  return started;
+}
+
+function recreateSelectionHook(reason) {
+  if (process.platform !== 'win32' || !savedCallbacks || !enabled) return;
+
+  console.log('[selection-hook] recreate:', reason || 'unknown');
+  detachHook();
+  createAndStartHook();
 }
 
 function isValidCoord(value) {
@@ -102,7 +121,6 @@ function getSelectionRect(data) {
 
   const width = rect.right - rect.left;
   const height = rect.bottom - rect.top;
-  // Native 模块未拿到选区矩形时，四个角会保持 CGPointZero (0,0)
   if (width < 1 && height < 1) return null;
 
   return rect;
@@ -111,7 +129,6 @@ function getSelectionRect(data) {
 function getSelectionAnchor(data) {
   const posLevel = data.posLevel ?? PositionLevel.NONE;
 
-  // 只有 posLevel >= SEL_FULL 时，段落坐标才可信
   if (posLevel >= PositionLevel.SEL_FULL) {
     const rect = getSelectionRect(data);
     if (rect) {
@@ -126,7 +143,6 @@ function getSelectionAnchor(data) {
     }
   }
 
-  // 拖拽/点击选词：用鼠标位置（此时段落坐标往往是占位符 0,0）
   if (posLevel >= PositionLevel.MOUSE_SINGLE && isValidPoint(data.mousePosEnd)) {
     return { x: data.mousePosEnd.x, y: data.mousePosEnd.y, rect: null };
   }
@@ -142,34 +158,24 @@ function handleSelection(data) {
   if (Date.now() < suppressUntil) return;
   if (!onSelectionCallback) return;
 
+  if (isWebView2Process(data.programName)) {
+    onDismissCallback?.();
+    return;
+  }
+
   if (!data?.text?.trim()) {
     onDismissCallback?.();
-    if (process.platform === 'win32') {
-      scheduleHookRestart(isWebView2Process(data.programName) ? 80 : 300);
-    }
     return;
   }
 
   const text = data.text.trim();
   if (text.length < MIN_LENGTH || text.length > MAX_LENGTH) {
     onDismissCallback?.();
-    if (process.platform === 'win32') {
-      scheduleHookRestart(isWebView2Process(data.programName) ? 80 : 300);
-    }
-    return;
-  }
-
-  if (isWebView2Process(data.programName)) {
-    onDismissCallback?.();
-    scheduleHookRestart(80);
     return;
   }
 
   const program = (data.programName || '').toLowerCase();
   if (program.includes('electron') || program.includes('huaci')) return;
-
-  awaitingSelectionAfterMouseDown = false;
-  cancelHookRestart();
 
   const anchor = getSelectionAnchor(data);
   const normalized = normalizeAnchor(anchor);
@@ -184,14 +190,7 @@ function handleSelection(data) {
 function handleMouseDown(data) {
   if (!enabled) return;
   if (Date.now() < suppressUntil) return;
-  awaitingSelectionAfterMouseDown = true;
   onMouseDownCallback?.(data);
-}
-
-function handleMouseUp() {
-  if (!enabled || process.platform !== 'win32') return;
-  if (!awaitingSelectionAfterMouseDown) return;
-  scheduleHookRestart(450);
 }
 
 function handleKeyDown(data) {
@@ -202,43 +201,24 @@ function handleKeyDown(data) {
 }
 
 function startSelectionMonitor(callbacks) {
-  const { onSelection, onMouseDown, onDismiss } = callbacks || {};
-  onSelectionCallback = onSelection;
-  onMouseDownCallback = onMouseDown;
-  onDismissCallback = onDismiss;
-  hook = new SelectionHook();
+  savedCallbacks = callbacks || {};
+  onSelectionCallback = savedCallbacks.onSelection;
+  onMouseDownCallback = savedCallbacks.onMouseDown;
+  onDismissCallback = savedCallbacks.onDismiss;
 
-  hook.on('text-selection', handleSelection);
-  hook.on('mouse-down', handleMouseDown);
-  hook.on('mouse-up', handleMouseUp);
-  hook.on('key-down', handleKeyDown);
-  hook.on('error', (err) => {
-    console.error('[selection-hook]', err);
-  });
+  createAndStartHook();
 
-  applyGlobalFilter();
-
-  const started = hook.start({
-    enableClipboard: true,
-    debug: false,
-  });
-
-  if (!started) {
-    console.warn('[selection-hook] failed to start');
+  if (process.platform === 'win32') {
+    focusMonitor.startFocusMonitor((nextProcess) => {
+      recreateSelectionHook(`leave webview2 -> ${nextProcess}`);
+    });
   }
 }
 
 function stopSelectionMonitor() {
-  cancelHookRestart();
-  if (hook) {
-    try {
-      hook.stop();
-      hook.cleanup();
-    } catch {
-      // ignore
-    }
-    hook = null;
-  }
+  focusMonitor.stopFocusMonitor();
+  detachHook();
+  savedCallbacks = null;
   onSelectionCallback = null;
   onMouseDownCallback = null;
   onDismissCallback = null;
