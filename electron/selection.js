@@ -13,6 +13,7 @@ const config = require('./app-config');
 const MIN_LENGTH = 1;
 const KEYBOARD_FETCH_DELAY_MS = 120;
 const DRAG_FETCH_DELAY_MS = 120;
+const SCREENSHOT_SUPPRESS_MS = 10000;
 const SELF_APP_IDS = ['com.surspark.huaci'];
 const { PositionLevel, INVALID_COORDINATE } = SelectionHook;
 
@@ -34,6 +35,13 @@ let keyboardFetchTimer = null;
 let selectionSinceMouseDown = false;
 let lastAcceptedText = '';
 let lastAcceptedAt = 0;
+let screenshotSessionUntil = 0;
+const modifierState = {
+  ctrl: false,
+  alt: false,
+  shift: false,
+  meta: false,
+};
 
 function hookState() {
   return {
@@ -81,6 +89,16 @@ function recreateHook(reason) {
 }
 
 function handleForegroundChange({ from, to, fromClass, toClass }) {
+  if (toClass === 'screenshot-shell') {
+    enterScreenshotSession('foreground-screenshot', 15000);
+    return;
+  }
+
+  if (fromClass === 'screenshot-shell') {
+    enterScreenshotSession('left-screenshot', 4000);
+    return;
+  }
+
   if (toClass === 'image-viewer-shell') {
     windows.hideToolbar();
     return;
@@ -93,6 +111,62 @@ function handleForegroundChange({ from, to, fromClass, toClass }) {
       recreateHook('left-image-viewer');
     }, 120);
   }
+}
+
+function cancelPendingSelectionFetches() {
+  if (probeTimer) {
+    clearTimeout(probeTimer);
+    probeTimer = null;
+  }
+  if (dragFetchTimer) {
+    clearTimeout(dragFetchTimer);
+    dragFetchTimer = null;
+  }
+  if (keyboardFetchTimer) {
+    clearTimeout(keyboardFetchTimer);
+    keyboardFetchTimer = null;
+  }
+}
+
+function enterScreenshotSession(reason, ms = SCREENSHOT_SUPPRESS_MS) {
+  if (process.platform !== 'win32') return;
+
+  const until = Date.now() + ms;
+  screenshotSessionUntil = Math.max(screenshotSessionUntil, until);
+  suppressUntil = Math.max(suppressUntil, until);
+  cancelPendingSelectionFetches();
+  windows.hideToolbar();
+  diagnostics.log('screenshot session', { reason, ms, until: screenshotSessionUntil });
+}
+
+function isCaptureBlocked() {
+  if (Date.now() < suppressUntil) return true;
+  if (process.platform !== 'win32') return false;
+  if (Date.now() < screenshotSessionUntil) return true;
+  return focusMonitor.isScreenshotForeground?.() || false;
+}
+
+function updateModifierState(data, pressed) {
+  if (process.platform !== 'win32') return;
+
+  const key = data?.uniKey || '';
+  if (key === 'Control') modifierState.ctrl = pressed;
+  if (key === 'Alt') modifierState.alt = pressed;
+  if (key === 'Shift') modifierState.shift = pressed;
+  if (key === 'Meta') modifierState.meta = pressed;
+}
+
+function isScreenshotHotkeyDown(data) {
+  if (process.platform !== 'win32') return false;
+
+  const key = (data?.uniKey || '').toLowerCase();
+  if (key === 'printscreen') return true;
+
+  if (key === 'a' && modifierState.alt && !modifierState.ctrl) return true;
+  if (key === 'a' && modifierState.ctrl && modifierState.alt) return true;
+  if (key === 's' && modifierState.meta && modifierState.shift) return true;
+
+  return false;
 }
 
 function createAndStartHook(reason) {
@@ -318,8 +392,8 @@ function processSelectionData(data, source = 'mouse') {
     diagnostics.log('selection skipped', { reason: 'monitor disabled', ...hookState() });
     return;
   }
-  if (Date.now() < suppressUntil) {
-    diagnostics.log('selection skipped', { reason: 'suppressed', ...hookState() });
+  if (isCaptureBlocked()) {
+    diagnostics.log('selection skipped', { reason: 'screenshot or suppressed', ...hookState() });
     return;
   }
   if (!onSelectionCallback) {
@@ -414,7 +488,7 @@ function handleMouseDown(data) {
   lastDragStart = data?.x != null ? { x: data.x, y: data.y } : null;
   lastMouseDown = lastDragStart ? { ...lastDragStart, t: Date.now() } : null;
   if (!enabled) return;
-  if (Date.now() < suppressUntil) return;
+  if (isCaptureBlocked()) return;
   onMouseDownCallback?.(data);
 }
 
@@ -423,7 +497,7 @@ function handleMouseUp(data) {
   lastDragEnd = data?.x != null ? { x: data.x, y: data.y } : null;
   lastMouseUp = lastDragEnd;
   const distance = dragDistance(lastMouseDown, data);
-  if (distance >= 8 && enabled && Date.now() >= suppressUntil) {
+  if (distance >= 8 && enabled && !isCaptureBlocked()) {
     const reason = `mouse-up drag=${Math.round(distance)}`;
     scheduleSelectionProbe(reason);
     scheduleDragSelectionFetch(reason);
@@ -432,20 +506,30 @@ function handleMouseUp(data) {
 }
 
 function handleKeyDown(data) {
+  updateModifierState(data, true);
+
+  if (process.platform === 'win32' && isScreenshotHotkeyDown(data)) {
+    enterScreenshotSession(`hotkey:${data?.uniKey || 'unknown'}`);
+  }
+
   if (data?.uniKey === 'Escape') {
     onDismissCallback?.({ escape: true });
   }
 }
 
-function isSelectAllKeyUp(data) {
-  if (!data?.sys) return false;
-  const key = (data.uniKey || '').toLowerCase();
-  return key === 'a';
+function isCtrlAKeyUp(data) {
+  if ((data?.uniKey || '').toLowerCase() !== 'a') return false;
+  if (process.platform === 'win32') {
+    return modifierState.ctrl && !modifierState.alt;
+  }
+  return !!data?.sys;
 }
 
 function handleKeyUp(data) {
-  if (!enabled || Date.now() < suppressUntil) return;
-  if (!isSelectAllKeyUp(data)) return;
+  updateModifierState(data, false);
+
+  if (!enabled || isCaptureBlocked()) return;
+  if (!isCtrlAKeyUp(data)) return;
   diagnostics.log('keyboard select-all', { uniKey: data.uniKey, ...hookState() });
   scheduleKeyboardSelectionFetch('ctrl+a');
 }
@@ -507,7 +591,7 @@ function setMonitorEnabled(value) {
 }
 
 function suppressCapture(ms = 600) {
-  suppressUntil = Date.now() + ms;
+  suppressUntil = Math.max(suppressUntil, Date.now() + ms);
   diagnostics.log('monitor suppress', { ms, until: suppressUntil });
 }
 

@@ -60,7 +60,8 @@ function createToolbarWindow() {
 
   toolbarWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   if (!isMac) {
-    toolbarWindow.setAlwaysOnTop(true, 'screen-saver');
+    // Keep below system screenshot overlays (screen-saver level covers Snipping Tool on Windows).
+    toolbarWindow.setAlwaysOnTop(true, 'floating');
   }
   toolbarWindow.loadFile(getRendererHtml('toolbar'));
 
@@ -194,7 +195,7 @@ function showToolbar(payload) {
 
     win.setBounds({ x: left, y: top, width, height }, false);
     if (process.platform !== 'darwin') {
-      win.setAlwaysOnTop(true, 'screen-saver');
+      win.setAlwaysOnTop(true, 'floating');
     }
     win.showInactive();
     win.webContents.send('toolbar:show', { text, buttons });

@@ -23,6 +23,7 @@ Write-Output $p.ProcessName
 let pollTimer = null;
 let polling = false;
 let lastForeground = '';
+let lastForegroundClass = 'unknown';
 let onForegroundChange = null;
 
 function queryForegroundProcess() {
@@ -42,9 +43,34 @@ function queryForegroundProcess() {
   });
 }
 
+const SCREENSHOT_PROCESS_PATTERNS = [
+  'snippingtool',
+  'screenclip',
+  'screenclippinghost',
+  'sharex',
+  'snipaste',
+  'greenshot',
+  'picpick',
+  'lightshot',
+  'snagit',
+  'faststone',
+  'hypersnap',
+  'goscreen',
+  'jietu',
+  'screenshot',
+  'screencapture',
+];
+
+function isScreenshotProcessName(name) {
+  const n = (name || '').toLowerCase();
+  if (!n) return false;
+  return SCREENSHOT_PROCESS_PATTERNS.some((pattern) => n.includes(pattern));
+}
+
 function classifyProcess(name) {
   const n = (name || '').toLowerCase();
   if (!n) return 'unknown';
+  if (isScreenshotProcessName(n)) return 'screenshot-shell';
   if (n.includes('msedgewebview2')) return 'webview2';
   if (n.includes('msedge') || n.includes('chrome') || n.includes('firefox')) return 'browser';
   if (n.includes('applicationframehost') || n.includes('photos') || n.includes('photoviewer')) {
@@ -53,9 +79,19 @@ function classifyProcess(name) {
   return 'other';
 }
 
+function isScreenshotForeground() {
+  return lastForegroundClass === 'screenshot-shell';
+}
+
 function startFocusMonitor(callback) {
   if (process.platform !== 'win32' || pollTimer) return;
   onForegroundChange = typeof callback === 'function' ? callback : null;
+
+  queryForegroundProcess().then((current) => {
+    if (!current) return;
+    lastForeground = current;
+    lastForegroundClass = classifyProcess(current);
+  });
 
   pollTimer = setInterval(async () => {
     if (polling) return;
@@ -74,6 +110,7 @@ function startFocusMonitor(callback) {
         toClass,
       });
       lastForeground = current;
+      lastForegroundClass = toClass;
 
       if (onForegroundChange) {
         onForegroundChange({ from, to: current, fromClass, toClass });
@@ -91,6 +128,7 @@ function stopFocusMonitor() {
   }
   polling = false;
   lastForeground = '';
+  lastForegroundClass = 'unknown';
   onForegroundChange = null;
 }
 
@@ -102,6 +140,9 @@ module.exports = {
   startFocusMonitor,
   stopFocusMonitor,
   getLastForeground,
+  getLastForegroundClass: () => lastForegroundClass,
+  isScreenshotForeground,
+  isScreenshotProcessName,
   queryForegroundProcess,
   classifyProcess,
 };
