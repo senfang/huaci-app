@@ -27,14 +27,15 @@ const SPREADSHEET_PROGRAM_PATTERNS = [
   'spreadsheet',
 ];
 const SPREADSHEET_CLIPBOARD_PROGRAMS = [
-  'EXCEL.EXE',
-  'Feishu.exe',
-  'Lark.exe',
+  'excel.exe',
+  'feishu.exe',
+  'lark.exe',
   'wps.exe',
   'et.exe',
-  'Numbers.app',
+  'numbers.app',
   'soffice.bin',
   'scalc',
+  'msedgewebview2.exe',
 ];
 const { PositionLevel, INVALID_COORDINATE, SelectionMethod, FilterMode } = SelectionHook;
 
@@ -199,7 +200,8 @@ function createAndStartHook(reason) {
 
   const startConfig = {
     debug: true,
-    enableClipboard: true,
+    // Clipboard fallback simulates Ctrl+C and triggers Feishu/Excel copy toasts on cell drags.
+    enableClipboard: false,
   };
 
   const started = hook.start(startConfig);
@@ -366,12 +368,37 @@ function looksLikeGridSelection(text, programName = '') {
   return false;
 }
 
+function getRecentDragDistance() {
+  return dragDistance(lastDragStart, lastDragEnd);
+}
+
+function isLikelySpreadsheetCellSelect(data, source = 'mouse') {
+  if (source !== 'mouse') return false;
+
+  const drag = getRecentDragDistance();
+  if (drag < 8) return false;
+
+  const program = data?.programName || '';
+  const text = data?.text?.trim() || '';
+  const posLevel = data?.posLevel ?? PositionLevel.NONE;
+
+  if (looksLikeGridSelection(text, program)) return true;
+  if (data?.method === SelectionMethod.CLIPBOARD) return true;
+  if (isSpreadsheetProgram(program) && posLevel < PositionLevel.SEL_FULL) return true;
+
+  return false;
+}
+
 function shouldSkipSpreadsheetSelection(data, source = 'mouse') {
   const program = data?.programName || '';
   const text = data?.text?.trim() || '';
 
   if (looksLikeGridSelection(text, program)) {
     return 'grid-selection';
+  }
+
+  if (isLikelySpreadsheetCellSelect(data, source)) {
+    return 'spreadsheet-cell-drag';
   }
 
   if (
@@ -419,31 +446,13 @@ function scheduleSelectionProbe(reason) {
   if (probeTimer) clearTimeout(probeTimer);
   probeTimer = setTimeout(() => {
     probeTimer = null;
-    try {
-      const probe = hook.getCurrentSelection();
-      diagnostics.log('probe getCurrentSelection', {
-        reason,
-        ok: !!(probe?.text?.trim()),
-        hadTextSelectionEvent: selectionSinceMouseDown,
-        gap:
-          probe?.text?.trim() && !selectionSinceMouseDown
-            ? 'hook-missed-but-probe-ok'
-            : probe?.text?.trim()
-              ? 'both-ok'
-              : 'both-fail',
-        textLen: probe?.text?.trim()?.length || 0,
-        program: probe?.programName || '',
-        method: probe?.method,
-        posLevel: probe?.posLevel,
-        ...hookState(),
-      });
-    } catch (err) {
-      diagnostics.log('probe getCurrentSelection failed', {
-        reason,
-        message: err?.message || String(err),
-        ...hookState(),
-      });
-    }
+    // Never call getCurrentSelection here — it can simulate Ctrl+C (Feishu: 复制多个单元格成功).
+    diagnostics.log('probe drag summary', {
+      reason,
+      hadTextSelectionEvent: selectionSinceMouseDown,
+      drag: Math.round(getRecentDragDistance()),
+      ...hookState(),
+    });
   }, 180);
 }
 
@@ -583,9 +592,11 @@ function handleMouseUp(data) {
   const distance = dragDistance(lastMouseDown, data);
   if (distance >= 8 && enabled && !isCaptureBlocked()) {
     const reason = `mouse-up drag=${Math.round(distance)}`;
+    if (!selectionSinceMouseDown) {
+      suppressCapture(1200);
+      windows.hideToolbar();
+    }
     scheduleSelectionProbe(reason);
-    // Do not drag-fetch: spreadsheet cell drags have no text-selection event but
-    // getCurrentSelection() would simulate Ctrl+C and pop the toolbar.
   }
   lastMouseDown = null;
 }
