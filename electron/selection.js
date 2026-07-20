@@ -15,7 +15,28 @@ const KEYBOARD_FETCH_DELAY_MS = 120;
 const DRAG_FETCH_DELAY_MS = 120;
 const SCREENSHOT_SUPPRESS_MS = 10000;
 const SELF_APP_IDS = ['com.surspark.huaci'];
-const { PositionLevel, INVALID_COORDINATE } = SelectionHook;
+const SPREADSHEET_PROGRAM_PATTERNS = [
+  'excel',
+  'wps',
+  'et.exe',
+  'feishu',
+  'lark',
+  'numbers',
+  'calc',
+  'sheet',
+  'spreadsheet',
+];
+const SPREADSHEET_CLIPBOARD_PROGRAMS = [
+  'EXCEL.EXE',
+  'Feishu.exe',
+  'Lark.exe',
+  'wps.exe',
+  'et.exe',
+  'Numbers.app',
+  'soffice.bin',
+  'scalc',
+];
+const { PositionLevel, INVALID_COORDINATE, SelectionMethod, FilterMode } = SelectionHook;
 
 let hook = null;
 let enabled = true;
@@ -173,7 +194,8 @@ function createAndStartHook(reason) {
   hook = new SelectionHook();
   attachHookListeners();
 
-  hook.setGlobalFilterMode(SelectionHook.FilterMode.EXCLUDE_LIST, SELF_APP_IDS);
+  hook.setGlobalFilterMode(FilterMode.EXCLUDE_LIST, SELF_APP_IDS);
+  hook.setClipboardMode(FilterMode.EXCLUDE_LIST, SPREADSHEET_CLIPBOARD_PROGRAMS);
 
   const startConfig = {
     debug: true,
@@ -317,6 +339,56 @@ function isSelfProgram(programName = '') {
   return SELF_APP_IDS.some((id) => program === id.toLowerCase());
 }
 
+function isSpreadsheetProgram(programName = '') {
+  const program = programName.toLowerCase();
+  if (!program) return false;
+  return SPREADSHEET_PROGRAM_PATTERNS.some((pattern) => program.includes(pattern));
+}
+
+function looksLikeGridSelection(text, programName = '') {
+  const lines = String(text || '')
+    .split(/\r?\n/)
+    .filter((line) => line.length > 0);
+  if (lines.length === 0) return false;
+
+  const tabCounts = lines.map((line) => (line.match(/\t/g) || []).length);
+  const maxTabs = Math.max(...tabCounts, 0);
+  if (maxTabs === 0) return false;
+
+  if (lines.length >= 2) return true;
+  if (maxTabs >= 2) return true;
+  if (maxTabs >= 1 && isSpreadsheetProgram(programName)) return true;
+  if (maxTabs >= 1 && lines.length === 1) {
+    const parts = lines[0].split('\t');
+    if (parts.length >= 2 && parts.every((part) => part.length <= 200)) return true;
+  }
+
+  return false;
+}
+
+function shouldSkipSpreadsheetSelection(data, source = 'mouse') {
+  const program = data?.programName || '';
+  const text = data?.text?.trim() || '';
+
+  if (looksLikeGridSelection(text, program)) {
+    return 'grid-selection';
+  }
+
+  if (
+    isSpreadsheetProgram(program) &&
+    data?.method === SelectionMethod.CLIPBOARD &&
+    source !== 'ctrl+a'
+  ) {
+    return 'spreadsheet-clipboard';
+  }
+
+  if (source === 'drag-fetch') {
+    return 'drag-fetch-disabled';
+  }
+
+  return '';
+}
+
 function withMouseAnchor(data) {
   return enrichDragPoints(data);
 }
@@ -425,6 +497,18 @@ function processSelectionData(data, source = 'mouse') {
     return;
   }
 
+  const spreadsheetSkip = shouldSkipSpreadsheetSelection(data, source);
+  if (spreadsheetSkip) {
+    onDismissCallback?.();
+    diagnostics.log('selection skipped', {
+      reason: spreadsheetSkip,
+      program,
+      source,
+      ...hookState(),
+    });
+    return;
+  }
+
   const now = Date.now();
   if (text === lastAcceptedText && now - lastAcceptedAt < 400) {
     diagnostics.log('selection skipped', { reason: 'duplicate', ...hookState() });
@@ -500,7 +584,8 @@ function handleMouseUp(data) {
   if (distance >= 8 && enabled && !isCaptureBlocked()) {
     const reason = `mouse-up drag=${Math.round(distance)}`;
     scheduleSelectionProbe(reason);
-    scheduleDragSelectionFetch(reason);
+    // Do not drag-fetch: spreadsheet cell drags have no text-selection event but
+    // getCurrentSelection() would simulate Ctrl+C and pop the toolbar.
   }
   lastMouseDown = null;
 }
