@@ -1,6 +1,6 @@
 {
   "name": "huaci-app",
-  "version": "1.0.21",
+  "version": "1.0.22",
   "description": "系统级划词助手 - 可配置工具栏与 HTTP 接口",
   "main": "electron/main.js",
   "author": "Surspark",

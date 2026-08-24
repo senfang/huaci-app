@@ -1,4 +1,5 @@
 const SelectionHook = require('selection-hook');
+const { execSync, execFileSync } = require('child_process');
 const {
   normalizeAnchor,
   normalizeKeyboardAnchor,
@@ -15,21 +16,19 @@ const KEYBOARD_FETCH_DELAY_MS = 120;
 const DRAG_FETCH_DELAY_MS = 120;
 const SCREENSHOT_SUPPRESS_MS = 10000;
 const SELF_APP_IDS = ['com.surspark.huaci'];
-const SPREADSHEET_PROGRAM_PATTERNS = [
+const DESKTOP_SPREADSHEET_PROGRAM_PATTERNS = [
   'excel',
   'wps',
   'et.exe',
-  'feishu',
-  'lark',
   'numbers',
   'calc',
   'sheet',
   'spreadsheet',
 ];
+const FEISHU_PROGRAM_PATTERNS = ['feishu', 'lark'];
+const FEISHU_BITABLE_WINDOW_PATTERNS = ['多维表格', '多维表', 'bitable', 'base'];
 const SPREADSHEET_CLIPBOARD_PROGRAMS = [
   'excel.exe',
-  'feishu.exe',
-  'lark.exe',
   'wps.exe',
   'et.exe',
   'numbers.app',
@@ -200,8 +199,8 @@ function createAndStartHook(reason) {
 
   const startConfig = {
     debug: true,
-    // Clipboard fallback simulates Ctrl+C and triggers Feishu/Excel copy toasts on cell drags.
-    enableClipboard: false,
+    // Clipboard fallback for apps where AX text is unavailable; spreadsheet apps are excluded below.
+    enableClipboard: true,
   };
 
   const started = hook.start(startConfig);
@@ -341,10 +340,112 @@ function isSelfProgram(programName = '') {
   return SELF_APP_IDS.some((id) => program === id.toLowerCase());
 }
 
-function isSpreadsheetProgram(programName = '') {
+function isFeishuProgram(programName = '') {
   const program = programName.toLowerCase();
   if (!program) return false;
-  return SPREADSHEET_PROGRAM_PATTERNS.some((pattern) => program.includes(pattern));
+  return FEISHU_PROGRAM_PATTERNS.some((pattern) => program.includes(pattern));
+}
+
+function isDesktopSpreadsheetProgram(programName = '') {
+  const program = programName.toLowerCase();
+  if (!program) return false;
+  return DESKTOP_SPREADSHEET_PROGRAM_PATTERNS.some((pattern) => program.includes(pattern));
+}
+
+function isFeishuBitableWindowTitle(windowTitle = '') {
+  const title = windowTitle.toLowerCase();
+  if (!title) return false;
+  return FEISHU_BITABLE_WINDOW_PATTERNS.some((pattern) => title.includes(pattern.toLowerCase()));
+}
+
+function getMacForegroundWindowTitleSync() {
+  if (process.platform !== 'darwin') return '';
+  try {
+    return execSync(
+      'osascript -e \'tell application "System Events" to tell (first application process whose frontmost is true) to if (count of windows) > 0 then get name of front window\'',
+      { encoding: 'utf8', timeout: 500 }
+    ).trim();
+  } catch {
+    return '';
+  }
+}
+
+const WIN_FOREGROUND_TITLE_SCRIPT = `
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public class Win32WindowTitle {
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
+}
+"@
+$h = [Win32WindowTitle]::GetForegroundWindow()
+$sb = New-Object System.Text.StringBuilder 256
+[void][Win32WindowTitle]::GetWindowText($h, $sb, 256)
+Write-Output $sb.ToString()
+`.trim();
+
+function getWinForegroundWindowTitleSync() {
+  if (process.platform !== 'win32') return '';
+  try {
+    return execFileSync(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', WIN_FOREGROUND_TITLE_SCRIPT],
+      { encoding: 'utf8', timeout: 800, windowsHide: true }
+    ).trim();
+  } catch {
+    return '';
+  }
+}
+
+function getMacForegroundAppSync() {
+  if (process.platform !== 'darwin') return '';
+  try {
+    return execSync(
+      'osascript -e \'tell application "System Events" to get name of first application process whose frontmost is true\'',
+      { encoding: 'utf8', timeout: 500 }
+    )
+      .trim()
+      .toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+function getForegroundAppSync() {
+  if (process.platform === 'win32') {
+    return focusMonitor.getLastForeground?.() || '';
+  }
+  return getMacForegroundAppSync();
+}
+
+function getForegroundWindowTitleSync() {
+  if (process.platform === 'win32') {
+    return getWinForegroundWindowTitleSync();
+  }
+  return getMacForegroundWindowTitleSync();
+}
+
+function isFeishuBitableForeground() {
+  const app = getForegroundAppSync();
+  if (!isFeishuProgram(app)) return false;
+  return isFeishuBitableWindowTitle(getForegroundWindowTitleSync());
+}
+
+function isDesktopSpreadsheetForeground() {
+  return isDesktopSpreadsheetProgram(getForegroundAppSync());
+}
+
+function shouldSkipDragSelectionFetch() {
+  if (isDesktopSpreadsheetForeground()) return true;
+  if (isFeishuBitableForeground()) return true;
+  return false;
+}
+
+function isFeishuBitableContext(programName = '') {
+  if (!isFeishuProgram(programName)) return false;
+  return isFeishuBitableForeground();
 }
 
 function looksLikeGridSelection(text, programName = '') {
@@ -359,7 +460,10 @@ function looksLikeGridSelection(text, programName = '') {
 
   if (lines.length >= 2) return true;
   if (maxTabs >= 2) return true;
-  if (maxTabs >= 1 && isSpreadsheetProgram(programName)) return true;
+  if (maxTabs >= 1 && isDesktopSpreadsheetProgram(programName)) return true;
+  if (maxTabs >= 1 && isFeishuProgram(programName) && isFeishuBitableWindowTitle(getForegroundWindowTitleSync())) {
+    return true;
+  }
   if (maxTabs >= 1 && lines.length === 1) {
     const parts = lines[0].split('\t');
     if (parts.length >= 2 && parts.every((part) => part.length <= 200)) return true;
@@ -383,8 +487,12 @@ function isLikelySpreadsheetCellSelect(data, source = 'mouse') {
   const posLevel = data?.posLevel ?? PositionLevel.NONE;
 
   if (looksLikeGridSelection(text, program)) return true;
-  if (data?.method === SelectionMethod.CLIPBOARD) return true;
-  if (isSpreadsheetProgram(program) && posLevel < PositionLevel.SEL_FULL) return true;
+  if (data?.method === SelectionMethod.CLIPBOARD) {
+    if (isDesktopSpreadsheetProgram(program)) return true;
+    if (isFeishuBitableContext(program)) return true;
+  }
+  if (isDesktopSpreadsheetProgram(program) && posLevel < PositionLevel.SEL_FULL) return true;
+  if (isFeishuBitableContext(program) && posLevel < PositionLevel.SEL_FULL) return true;
 
   return false;
 }
@@ -402,7 +510,15 @@ function shouldSkipSpreadsheetSelection(data, source = 'mouse') {
   }
 
   if (
-    isSpreadsheetProgram(program) &&
+    isDesktopSpreadsheetProgram(program) &&
+    data?.method === SelectionMethod.CLIPBOARD &&
+    source !== 'ctrl+a'
+  ) {
+    return 'spreadsheet-clipboard';
+  }
+
+  if (
+    isFeishuBitableContext(program) &&
     data?.method === SelectionMethod.CLIPBOARD &&
     source !== 'ctrl+a'
   ) {
@@ -410,7 +526,14 @@ function shouldSkipSpreadsheetSelection(data, source = 'mouse') {
   }
 
   if (source === 'drag-fetch') {
-    return 'drag-fetch-disabled';
+    if (isDesktopSpreadsheetProgram(program)) {
+      if (looksLikeGridSelection(text, program)) return 'grid-selection';
+      if (isLikelySpreadsheetCellSelect(data, 'mouse')) return 'spreadsheet-cell-drag';
+    }
+    if (isFeishuBitableContext(program)) {
+      if (looksLikeGridSelection(text, program)) return 'grid-selection';
+      if (isLikelySpreadsheetCellSelect(data, 'mouse')) return 'spreadsheet-cell-drag';
+    }
   }
 
   return '';
@@ -422,6 +545,15 @@ function withMouseAnchor(data) {
 
 function fetchSelectionAfterDrag(reason) {
   if (!hook?.isRunning() || selectionSinceMouseDown) return;
+  if (shouldSkipDragSelectionFetch()) {
+    diagnostics.log('drag selection skipped', {
+      reason,
+      desktopSpreadsheet: isDesktopSpreadsheetForeground(),
+      feishuBitable: isFeishuBitableForeground(),
+      ...hookState(),
+    });
+    return;
+  }
 
   let selection = null;
   try {
@@ -592,11 +724,10 @@ function handleMouseUp(data) {
   const distance = dragDistance(lastMouseDown, data);
   if (distance >= 8 && enabled && !isCaptureBlocked()) {
     const reason = `mouse-up drag=${Math.round(distance)}`;
-    if (!selectionSinceMouseDown) {
-      suppressCapture(1200);
-      windows.hideToolbar();
-    }
     scheduleSelectionProbe(reason);
+    if (!selectionSinceMouseDown && !shouldSkipDragSelectionFetch()) {
+      scheduleDragSelectionFetch(reason);
+    }
   }
   lastMouseDown = null;
 }
