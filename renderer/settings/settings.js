@@ -1,6 +1,6 @@
 'use strict';
 
-let config = { difyProfiles: [], toolbarButtons: [] };
+let config = { apiProfiles: [], toolbarButtons: [] };
 let dragSrcId = null;
 
 const buttonList = document.getElementById('buttonList');
@@ -107,18 +107,22 @@ function showToast() {
   setTimeout(() => toast.classList.remove('show'), 2000);
 }
 
+function getButtonProfileId(button) {
+  return button?.apiProfileId || button?.difyProfileId || '';
+}
+
 function profileOptionsHtml(selectedId) {
   const profiles = collectProfilesFromDom();
   const opts = profiles.map(
-    (p) => `<option value="${p.id}" ${p.id === selectedId ? 'selected' : ''}>${escapeHtml(p.name || '未命名工作流')}</option>`
+    (p) => `<option value="${p.id}" ${p.id === selectedId ? 'selected' : ''}>${escapeHtml(p.name || '未命名接口')}</option>`
   );
-  return opts.join('') || '<option value="">（请先添加工作流）</option>';
+  return opts.join('') || '<option value="">（请先添加接口）</option>';
 }
 
 function collectProfilesFromDom() {
   return [...profileList.querySelectorAll('.profile-card')].map((card) => ({
     id: card.dataset.id,
-    name: card.querySelector('.profile-name').value.trim() || '未命名工作流',
+    name: card.querySelector('.profile-name').value.trim() || '未命名接口',
   }));
 }
 
@@ -135,7 +139,7 @@ function refreshProfileSelects() {
     const row = sel.closest('.item-row');
     const id = row?.dataset.id;
     const btn = config.toolbarButtons.find((b) => b.id === id);
-    const current = btn?.difyProfileId || '';
+    const current = getButtonProfileId(btn);
     sel.innerHTML = profileOptionsHtml(current);
     sel.disabled = row?.querySelector('.btn-type')?.value === 'copy';
   });
@@ -148,13 +152,15 @@ function renderButtons() {
     const row = node.querySelector('.item-row');
     row.dataset.id = btn.id;
 
+    const buttonType = btn.type === 'dify' ? 'api' : btn.type || 'api';
+
     row.querySelector('.btn-enabled').checked = btn.enabled !== false;
     row.querySelector('.btn-label').value = btn.label || '';
     row.querySelector('.btn-icon').value = btn.icon || '';
-    row.querySelector('.btn-type').value = btn.type || 'dify';
+    row.querySelector('.btn-type').value = buttonType;
     row.querySelector('.btn-primary').checked = !!btn.primary;
-    row.querySelector('.btn-profile').innerHTML = profileOptionsHtml(btn.difyProfileId);
-    row.querySelector('.btn-profile').disabled = btn.type === 'copy';
+    row.querySelector('.btn-profile').innerHTML = profileOptionsHtml(getButtonProfileId(btn));
+    row.querySelector('.btn-profile').disabled = buttonType === 'copy';
 
     row.querySelector('.btn-type').addEventListener('change', (e) => {
       row.querySelector('.btn-profile').disabled = e.target.value === 'copy';
@@ -190,26 +196,23 @@ function renderButtons() {
 
 function renderProfiles() {
   profileList.innerHTML = '';
-  config.difyProfiles.forEach((profile) => {
+  config.apiProfiles.forEach((profile) => {
     const node = profileTpl.content.cloneNode(true);
     const card = node.querySelector('.profile-card');
     card.dataset.id = profile.id;
 
     card.querySelector('.profile-name').value = profile.name || '';
-    card.querySelector('.profile-apiBaseUrl').value = profile.apiBaseUrl || '';
-    card.querySelector('.profile-apiKey').value = profile.apiKey || '';
-    card.querySelector('.profile-inputVariable').value = profile.inputVariable || 'query';
-    card.querySelector('.profile-userId').value = profile.userId || 'huaci-app-user';
+    card.querySelector('.profile-url').value = profile.url || '';
 
     card.querySelector('.profile-name').addEventListener('input', () => {
       refreshProfileSelects();
     });
 
     card.querySelector('.btn-delete-profile').addEventListener('click', () => {
-      if (!confirm(`确定删除工作流「${profile.name}」？`)) return;
-      config.difyProfiles = config.difyProfiles.filter((p) => p.id !== profile.id);
+      if (!confirm(`确定删除接口「${profile.name}」？`)) return;
+      config.apiProfiles = config.apiProfiles.filter((p) => p.id !== profile.id);
       config.toolbarButtons.forEach((b) => {
-        if (b.difyProfileId === profile.id) b.enabled = false;
+        if (getButtonProfileId(b) === profile.id) b.enabled = false;
       });
       renderProfiles();
       refreshProfileSelects();
@@ -222,11 +225,8 @@ function renderProfiles() {
 function collectFormData() {
   const profiles = [...profileList.querySelectorAll('.profile-card')].map((card) => ({
     id: card.dataset.id,
-    name: card.querySelector('.profile-name').value.trim() || '未命名工作流',
-    apiBaseUrl: card.querySelector('.profile-apiBaseUrl').value.trim() || 'https://dify.surspark.com/v1',
-    apiKey: card.querySelector('.profile-apiKey').value.trim(),
-    inputVariable: card.querySelector('.profile-inputVariable').value.trim() || 'query',
-    userId: card.querySelector('.profile-userId').value.trim() || 'huaci-app-user',
+    name: card.querySelector('.profile-name').value.trim() || '未命名接口',
+    url: card.querySelector('.profile-url').value.trim(),
   }));
 
   const buttons = [...buttonList.querySelectorAll('.item-row')].map((row) => ({
@@ -234,13 +234,13 @@ function collectFormData() {
     label: row.querySelector('.btn-label').value.trim() || '按钮',
     icon: row.querySelector('.btn-icon').value.trim(),
     type: row.querySelector('.btn-type').value,
-    difyProfileId: row.querySelector('.btn-profile').value || null,
+    apiProfileId: row.querySelector('.btn-profile').value || null,
     enabled: row.querySelector('.btn-enabled').checked,
     primary: row.querySelector('.btn-primary').checked,
   }));
 
   return {
-    difyProfiles: profiles,
+    apiProfiles: profiles,
     toolbarButtons: buttons,
     launchAtLogin: document.getElementById('launchAtLogin').checked,
     selectionEnabled: document.getElementById('selectionEnabled').checked,
@@ -251,6 +251,9 @@ function collectFormData() {
 
 async function load() {
   config = await window.huaci.getConfig();
+  config.apiProfiles = config.apiProfiles || config.difyProfiles || [];
+  config.toolbarButtons = config.toolbarButtons || [];
+
   document.getElementById('launchAtLogin').checked = !!config.launchAtLogin;
   document.getElementById('selectionEnabled').checked = config.selectionEnabled !== false;
   document.getElementById('selectionMaxLength').value = String(config.selectionMaxLength ?? 50000);
@@ -277,18 +280,18 @@ async function load() {
 }
 
 document.getElementById('addProfile').addEventListener('click', async () => {
-  const item = await window.huaci.addProfile({ name: '新工作流' });
-  config.difyProfiles.push(item);
+  const item = await window.huaci.addProfile({ name: '新接口' });
+  config.apiProfiles.push(item);
   renderProfiles();
   refreshProfileSelects();
 });
 
 document.getElementById('addButton').addEventListener('click', async () => {
-  const defaultProfileId = config.difyProfiles[0]?.id || null;
+  const defaultProfileId = config.apiProfiles[0]?.id || null;
   const item = await window.huaci.addButton({
     label: '新按钮',
-    type: 'dify',
-    difyProfileId: defaultProfileId,
+    type: 'api',
+    apiProfileId: defaultProfileId,
     enabled: true,
     primary: false,
   });

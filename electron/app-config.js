@@ -4,14 +4,11 @@ const { v4: uuidv4 } = require('uuid');
 const store = new Store({
   name: 'huaci-config',
   defaults: {
-    difyProfiles: [
+    apiProfiles: [
       {
         id: 'default',
-        name: '默认工作流',
-        apiBaseUrl: 'https://dify.surspark.com/v1',
-        apiKey: '',
-        inputVariable: 'query',
-        userId: 'huaci-app-user',
+        name: '默认接口',
+        url: '',
       },
     ],
     toolbarButtons: [
@@ -19,8 +16,8 @@ const store = new Store({
         id: 'btn-ai',
         label: 'AI 解读',
         icon: '✨',
-        type: 'dify',
-        difyProfileId: 'default',
+        type: 'api',
+        apiProfileId: 'default',
         enabled: true,
         primary: true,
       },
@@ -54,7 +51,43 @@ function normalizeSelectionMaxLength(value) {
   return Math.min(n, 500000);
 }
 
+function migrateStoredConfig() {
+  const legacyProfiles = store.get('difyProfiles');
+  if (!store.get('apiProfiles') && Array.isArray(legacyProfiles)) {
+    store.set(
+      'apiProfiles',
+      legacyProfiles.map((profile) => ({
+        id: profile.id,
+        name: profile.name || '未命名接口',
+        url: profile.url || '',
+      }))
+    );
+    store.delete('difyProfiles');
+  }
+
+  const buttons = store.get('toolbarButtons') || [];
+  let changed = false;
+  const migratedButtons = buttons.map((button) => {
+    const next = { ...button };
+    if (button.type === 'dify') {
+      next.type = 'api';
+      changed = true;
+    }
+    if (button.difyProfileId && !button.apiProfileId) {
+      next.apiProfileId = button.difyProfileId;
+      delete next.difyProfileId;
+      changed = true;
+    }
+    return next;
+  });
+  if (changed) {
+    store.set('toolbarButtons', migratedButtons);
+  }
+}
+
 function getConfig() {
+  migrateStoredConfig();
+
   const data = store.store;
   const normalized = normalizeSettingsShortcut(data.settingsShortcut);
   if (normalized !== data.settingsShortcut) {
@@ -73,13 +106,29 @@ function getEnabledToolbarButtons() {
   return (store.get('toolbarButtons') || []).filter((b) => b.enabled);
 }
 
-function getDifyProfile(id) {
-  return (store.get('difyProfiles') || []).find((p) => p.id === id);
+function getApiProfile(id) {
+  return (store.get('apiProfiles') || []).find((p) => p.id === id);
 }
 
 function saveConfig(partial) {
   if ('selectionMaxLength' in partial) {
     partial.selectionMaxLength = normalizeSelectionMaxLength(partial.selectionMaxLength);
+  }
+  if ('difyProfiles' in partial && !('apiProfiles' in partial)) {
+    partial.apiProfiles = partial.difyProfiles.map((profile) => ({
+      id: profile.id,
+      name: profile.name || '未命名接口',
+      url: profile.url || profile.apiBaseUrl || '',
+    }));
+    delete partial.difyProfiles;
+  }
+  if (Array.isArray(partial.toolbarButtons)) {
+    partial.toolbarButtons = partial.toolbarButtons.map((button) => ({
+      ...button,
+      type: button.type === 'dify' ? 'api' : button.type,
+      apiProfileId: button.apiProfileId || button.difyProfileId || null,
+      difyProfileId: undefined,
+    }));
   }
   for (const [key, value] of Object.entries(partial)) {
     store.set(key, value);
@@ -87,37 +136,34 @@ function saveConfig(partial) {
   return getConfig();
 }
 
-function addDifyProfile(profile) {
-  const profiles = store.get('difyProfiles') || [];
+function addApiProfile(profile) {
+  const profiles = store.get('apiProfiles') || [];
   const item = {
     id: uuidv4(),
-    name: profile.name || '新工作流',
-    apiBaseUrl: profile.apiBaseUrl || 'https://dify.surspark.com/v1',
-    apiKey: profile.apiKey || '',
-    inputVariable: profile.inputVariable || 'query',
-    userId: profile.userId || 'huaci-app-user',
+    name: profile.name || '新接口',
+    url: profile.url || '',
   };
   profiles.push(item);
-  store.set('difyProfiles', profiles);
+  store.set('apiProfiles', profiles);
   return item;
 }
 
-function updateDifyProfile(id, updates) {
-  const profiles = store.get('difyProfiles') || [];
+function updateApiProfile(id, updates) {
+  const profiles = store.get('apiProfiles') || [];
   const idx = profiles.findIndex((p) => p.id === id);
   if (idx === -1) return null;
   profiles[idx] = { ...profiles[idx], ...updates, id };
-  store.set('difyProfiles', profiles);
+  store.set('apiProfiles', profiles);
   return profiles[idx];
 }
 
-function deleteDifyProfile(id) {
-  let profiles = store.get('difyProfiles') || [];
+function deleteApiProfile(id) {
+  let profiles = store.get('apiProfiles') || [];
   profiles = profiles.filter((p) => p.id !== id);
-  store.set('difyProfiles', profiles);
+  store.set('apiProfiles', profiles);
 
   const buttons = (store.get('toolbarButtons') || []).map((b) => {
-    if (b.type === 'dify' && b.difyProfileId === id) {
+    if ((b.type === 'api' || b.type === 'dify') && b.apiProfileId === id) {
       return { ...b, enabled: false };
     }
     return b;
@@ -131,8 +177,8 @@ function addToolbarButton(button) {
     id: uuidv4(),
     label: button.label || '新按钮',
     icon: button.icon || '',
-    type: button.type || 'dify',
-    difyProfileId: button.difyProfileId || null,
+    type: button.type === 'dify' ? 'api' : button.type || 'api',
+    apiProfileId: button.apiProfileId || button.difyProfileId || null,
     enabled: button.enabled !== false,
     primary: !!button.primary,
   };
@@ -166,11 +212,11 @@ function reorderToolbarButtons(orderedIds) {
 module.exports = {
   getConfig,
   getEnabledToolbarButtons,
-  getDifyProfile,
+  getApiProfile,
   saveConfig,
-  addDifyProfile,
-  updateDifyProfile,
-  deleteDifyProfile,
+  addApiProfile,
+  updateApiProfile,
+  deleteApiProfile,
   addToolbarButton,
   updateToolbarButton,
   deleteToolbarButton,

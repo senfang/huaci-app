@@ -10,7 +10,7 @@ const {
 } = require('electron');
 
 const config = require('./app-config');
-const { runDifyWorkflow } = require('./dify');
+const { runApiRequest } = require('./api');
 const selection = require('./selection');
 const { toElectronPoint } = require('./coordinates');
 const windows = require('./windows');
@@ -181,9 +181,9 @@ function registerIpc() {
 
   ipcMain.handle('app:getLaunchAtLogin', () => loginItem.getLaunchAtLogin());
 
-  ipcMain.handle('config:addProfile', (_e, profile) => config.addDifyProfile(profile));
-  ipcMain.handle('config:updateProfile', (_e, id, updates) => config.updateDifyProfile(id, updates));
-  ipcMain.handle('config:deleteProfile', (_e, id) => config.deleteDifyProfile(id));
+  ipcMain.handle('config:addProfile', (_e, profile) => config.addApiProfile(profile));
+  ipcMain.handle('config:updateProfile', (_e, id, updates) => config.updateApiProfile(id, updates));
+  ipcMain.handle('config:deleteProfile', (_e, id) => config.deleteApiProfile(id));
   ipcMain.handle('config:addButton', (_e, button) => config.addToolbarButton(button));
   ipcMain.handle('config:updateButton', (_e, id, updates) => config.updateToolbarButton(id, updates));
   ipcMain.handle('config:deleteButton', (_e, id) => config.deleteToolbarButton(id));
@@ -201,15 +201,15 @@ function registerIpc() {
       return;
     }
 
-    if (button?.type === 'dify') {
-      const profile = config.getDifyProfile(button.difyProfileId);
+    if (button?.type === 'api' || button?.type === 'dify') {
+      const profile = config.getApiProfile(button.apiProfileId || button.difyProfileId);
       if (!profile) {
         windows.showDialog({
           text: selectedText,
           title: button.label,
           profileId: null,
         });
-        windows.sendDialogEvent({ type: 'error', message: '未找到关联的 Dify 配置' });
+        windows.sendDialogEvent({ type: 'error', message: '未找到关联的接口配置' });
         return;
       }
 
@@ -236,22 +236,18 @@ function registerIpc() {
 
   ipcMain.on('dialog:run', (_e, { text, profileId }) => {
     abortActiveWorkflow();
-    const profile = config.getDifyProfile(profileId);
+    const profile = config.getApiProfile(profileId);
     if (!profile) {
-      windows.sendDialogEvent({ type: 'error', message: 'Dify 配置不存在' });
+      windows.sendDialogEvent({ type: 'error', message: '接口配置不存在' });
       return;
     }
 
     const controller = new AbortController();
     activeAbort = controller;
 
-    runDifyWorkflow(
-      profile,
-      text,
-      (event) => windows.sendDialogEvent({ type: 'event', event }),
-      controller.signal
-    )
-      .then(() => {
+    runApiRequest(profile, text, controller.signal)
+      .then((result) => {
+        windows.sendDialogEvent({ type: 'result', text: result });
         windows.sendDialogEvent({ type: 'done' });
       })
       .catch((err) => {

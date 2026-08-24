@@ -10,7 +10,7 @@
   <div class="container">
     <header class="page-header">
       <h1>划词助手设置</h1>
-      <p class="subtitle">配置工具栏按钮与多个 Dify 工作流</p>
+      <p class="subtitle">配置工具栏按钮与接口地址</p>
     </header>
 
     <div id="accessBanner" class="banner" style="display:none">
@@ -42,7 +42,7 @@
       <div class="field shortcut-field">
         <label for="selectionMaxLength">选区字数上限</label>
         <input type="number" id="selectionMaxLength" class="number-input" min="1" max="500000" step="1000" />
-        <span class="hint">超过此字数的选区不会弹出工具栏，默认 50000。复制与 AI 解读仍受 Dify 接口限制。</span>
+        <span class="hint">超过此字数的选区不会弹出工具栏，默认 50000。</span>
       </div>
       <div class="field shortcut-field">
         <label for="settingsShortcut">打开设置快捷键</label>
@@ -57,16 +57,16 @@
         <h2>工具栏按钮</h2>
         <button class="btn-secondary" id="addButton">+ 添加按钮</button>
       </div>
-      <p class="hint">划词后弹出的按钮，可绑定不同 Dify 工作流或复制操作。拖拽调整顺序。</p>
+      <p class="hint">划词后弹出的按钮，可绑定不同接口或复制操作。拖拽调整顺序。</p>
       <ul id="buttonList" class="item-list"></ul>
     </section>
 
     <section class="card">
       <div class="card-header">
-        <h2>Dify 工作流</h2>
-        <button class="btn-secondary" id="addProfile">+ 添加工作流</button>
+        <h2>接口配置</h2>
+        <button class="btn-secondary" id="addProfile">+ 添加接口</button>
       </div>
-      <p class="hint">可配置多个 Dify 实例，每个按钮绑定其中一个工作流。</p>
+      <p class="hint">每个接口通过 POST 发送 JSON：<code>{ "text": "选中的内容" }</code>，返回结果会展示在弹窗中。</p>
       <div id="profileList"></div>
     </section>
 
@@ -83,7 +83,7 @@
       <input type="text" class="btn-label" placeholder="按钮文字" />
       <input type="text" class="btn-icon" placeholder="图标 emoji" style="width:72px" />
       <select class="btn-type">
-        <option value="dify">Dify 工作流</option>
+        <option value="api">接口请求</option>
         <option value="copy">复制</option>
       </select>
       <select class="btn-profile"></select>
@@ -95,25 +95,13 @@
   <template id="profileItemTpl">
     <div class="profile-card">
       <div class="profile-header">
-        <input type="text" class="profile-name" placeholder="工作流名称" />
+        <input type="text" class="profile-name" placeholder="接口名称" />
         <button class="btn-danger btn-delete-profile">删除</button>
       </div>
       <div class="field-grid">
         <div class="field">
-          <label>API 地址</label>
-          <input type="url" class="profile-apiBaseUrl" placeholder="https://dify.surspark.com/v1" />
-        </div>
-        <div class="field">
-          <label>API Key</label>
-          <input type="password" class="profile-apiKey" placeholder="app-xxxxxxxx" />
-        </div>
-        <div class="field">
-          <label>输入变量名</label>
-          <input type="text" class="profile-inputVariable" placeholder="query" />
-        </div>
-        <div class="field">
-          <label>用户标识</label>
-          <input type="text" class="profile-userId" placeholder="huaci-app-user" />
+          <label>接口地址</label>
+          <input type="url" class="profile-url" placeholder="https://example.com/api/interpret" />
         </div>
       </div>
     </div>
