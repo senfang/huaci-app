@@ -13,6 +13,9 @@ contextBridge.exposeInMainWorld('huaci', {
   abort() {
     ipcRenderer.send('dialog:abort');
   },
+  openExternal(url) {
+    ipcRenderer.send('dialog:openExternal', url);
+  },
   close() {
     ipcRenderer.send('dialog:close');
   },

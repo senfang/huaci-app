@@ -142,7 +142,6 @@ html, body {
   font-size: 14px;
   line-height: 1.7;
   color: #2d2d3a;
-  white-space: pre-wrap;
   word-break: break-word;
   min-height: 80px;
 }
@@ -150,6 +149,113 @@ html, body {
 .result-box.empty {
   color: #aaa;
   font-style: italic;
+  white-space: pre-wrap;
+}
+
+.result-box.markdown-body {
+  white-space: normal;
+}
+
+.result-box.markdown-body > :first-child {
+  margin-top: 0;
+}
+
+.result-box.markdown-body > :last-child {
+  margin-bottom: 0;
+}
+
+.result-box.markdown-body h1,
+.result-box.markdown-body h2,
+.result-box.markdown-body h3,
+.result-box.markdown-body h4 {
+  color: #1a1a2e;
+  font-weight: 600;
+  line-height: 1.35;
+  margin: 1.1em 0 0.55em;
+}
+
+.result-box.markdown-body h1 { font-size: 1.35em; }
+.result-box.markdown-body h2 { font-size: 1.2em; }
+.result-box.markdown-body h3 { font-size: 1.08em; }
+.result-box.markdown-body h4 { font-size: 1em; }
+
+.result-box.markdown-body p,
+.result-box.markdown-body ul,
+.result-box.markdown-body ol,
+.result-box.markdown-body blockquote,
+.result-box.markdown-body pre,
+.result-box.markdown-body table {
+  margin: 0.65em 0;
+}
+
+.result-box.markdown-body ul,
+.result-box.markdown-body ol {
+  padding-left: 1.35em;
+}
+
+.result-box.markdown-body li + li {
+  margin-top: 0.25em;
+}
+
+.result-box.markdown-body blockquote {
+  border-left: 3px solid #d8d8ea;
+  padding-left: 12px;
+  color: #555;
+}
+
+.result-box.markdown-body code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.92em;
+  background: #ececf8;
+  border-radius: 4px;
+  padding: 0.12em 0.35em;
+}
+
+.result-box.markdown-body pre {
+  background: #1e1e2e;
+  color: #edf2ff;
+  border-radius: 10px;
+  padding: 12px 14px;
+  overflow-x: auto;
+}
+
+.result-box.markdown-body pre code {
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+
+.result-box.markdown-body a {
+  color: #6366f1;
+  text-decoration: none;
+}
+
+.result-box.markdown-body a:hover {
+  text-decoration: underline;
+}
+
+.result-box.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.result-box.markdown-body th,
+.result-box.markdown-body td {
+  border: 1px solid #e4e4ef;
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.result-box.markdown-body th {
+  background: #f0f0f8;
+  font-weight: 600;
+}
+
+.result-box.markdown-body hr {
+  border: none;
+  border-top: 1px solid #e8e8f2;
+  margin: 1em 0;
 }
 
 .status-bar {

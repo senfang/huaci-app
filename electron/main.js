@@ -266,6 +266,12 @@ function registerIpc() {
     abortActiveWorkflow();
   });
 
+  ipcMain.on('dialog:openExternal', (_e, url) => {
+    if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
+      shell.openExternal(url);
+    }
+  });
+
   ipcMain.handle('app:checkAccessibility', () => ({
     platform: process.platform,
     trusted: process.platform === 'darwin'
