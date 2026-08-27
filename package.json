@@ -1,6 +1,6 @@
 {
   "name": "huaci-app",
-  "version": "1.0.23",
+  "version": "1.0.24",
   "description": "系统级划词助手 - 可配置工具栏与 HTTP 接口",
   "main": "electron/main.js",
   "author": "Surspark",
@@ -10,7 +10,7 @@
     "dev": "env -u ELECTRON_RUN_AS_NODE electron . --enable-logging",
     "rebuild": "electron-rebuild -f -w selection-hook",
     "build": "electron-builder",
-    "build:mac": "electron-builder --mac",
+    "build:mac": "swiftc -O electron/ax-focus-probe.swift -o electron/ax-focus-probe 2>/dev/null || true && electron-builder --mac",
     "build:win": "electron-builder --win"
   },
   "build": {

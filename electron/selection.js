@@ -1,5 +1,5 @@
 const SelectionHook = require('selection-hook');
-const { execSync, execFileSync } = require('child_process');
+const { execSync } = require('child_process');
 const {
   normalizeAnchor,
   normalizeKeyboardAnchor,
@@ -10,6 +10,7 @@ const focusMonitor = require('./focus-monitor');
 const diagnostics = require('./selection-diagnostics');
 const windows = require('./windows');
 const config = require('./app-config');
+const axFocus = require('./ax-focus');
 
 const MIN_LENGTH = 1;
 const KEYBOARD_FETCH_DELAY_MS = 120;
@@ -26,7 +27,15 @@ const DESKTOP_SPREADSHEET_PROGRAM_PATTERNS = [
   'spreadsheet',
 ];
 const FEISHU_PROGRAM_PATTERNS = ['feishu', 'lark'];
-const FEISHU_BITABLE_WINDOW_PATTERNS = ['多维表格', '多维表', 'bitable', 'base'];
+const FEISHU_CLIPBOARD_BLOCK_PROGRAMS = [
+  'feishu',
+  'lark',
+  'feishu.exe',
+  'lark.exe',
+  'com.electron.lark',
+  'com.bytedance.feishu',
+  'com.bytedance.macos.feishu',
+];
 const SPREADSHEET_CLIPBOARD_PROGRAMS = [
   'excel.exe',
   'wps.exe',
@@ -57,6 +66,9 @@ let selectionSinceMouseDown = false;
 let lastAcceptedText = '';
 let lastAcceptedAt = 0;
 let screenshotSessionUntil = 0;
+let clipboardExcludeListKey = '';
+let feishuClipboardPollTimer = null;
+const FEISHU_CLIPBOARD_POLL_MS = 300;
 const modifierState = {
   ctrl: false,
   alt: false,
@@ -195,7 +207,8 @@ function createAndStartHook(reason) {
   attachHookListeners();
 
   hook.setGlobalFilterMode(FilterMode.EXCLUDE_LIST, SELF_APP_IDS);
-  hook.setClipboardMode(FilterMode.EXCLUDE_LIST, SPREADSHEET_CLIPBOARD_PROGRAMS);
+  clipboardExcludeListKey = '';
+  syncClipboardPolicy('hook-start');
 
   const startConfig = {
     debug: true,
@@ -352,51 +365,14 @@ function isDesktopSpreadsheetProgram(programName = '') {
   return DESKTOP_SPREADSHEET_PROGRAM_PATTERNS.some((pattern) => program.includes(pattern));
 }
 
-function isFeishuBitableWindowTitle(windowTitle = '') {
-  const title = windowTitle.toLowerCase();
-  if (!title) return false;
-  return FEISHU_BITABLE_WINDOW_PATTERNS.some((pattern) => title.includes(pattern.toLowerCase()));
+function isFeishuSpreadsheetAxFocus(probe = axFocus.probeAxFocusCached()) {
+  if (!isFeishuProgram(getForegroundAppSync())) return false;
+  return axFocus.isSpreadsheetLikeAxFocus(probe);
 }
 
-function getMacForegroundWindowTitleSync() {
-  if (process.platform !== 'darwin') return '';
-  try {
-    return execSync(
-      'osascript -e \'tell application "System Events" to tell (first application process whose frontmost is true) to if (count of windows) > 0 then get name of front window\'',
-      { encoding: 'utf8', timeout: 500 }
-    ).trim();
-  } catch {
-    return '';
-  }
-}
-
-const WIN_FOREGROUND_TITLE_SCRIPT = `
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-using System.Text;
-public class Win32WindowTitle {
-  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
-}
-"@
-$h = [Win32WindowTitle]::GetForegroundWindow()
-$sb = New-Object System.Text.StringBuilder 256
-[void][Win32WindowTitle]::GetWindowText($h, $sb, 256)
-Write-Output $sb.ToString()
-`.trim();
-
-function getWinForegroundWindowTitleSync() {
-  if (process.platform !== 'win32') return '';
-  try {
-    return execFileSync(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-Command', WIN_FOREGROUND_TITLE_SCRIPT],
-      { encoding: 'utf8', timeout: 800, windowsHide: true }
-    ).trim();
-  } catch {
-    return '';
-  }
+function isFeishuSpreadsheetContext(programName = '', probe = axFocus.probeAxFocusCached()) {
+  if (!isFeishuProgram(programName)) return false;
+  return axFocus.isSpreadsheetLikeAxFocus(probe);
 }
 
 function getMacForegroundAppSync() {
@@ -420,17 +396,48 @@ function getForegroundAppSync() {
   return getMacForegroundAppSync();
 }
 
-function getForegroundWindowTitleSync() {
-  if (process.platform === 'win32') {
-    return getWinForegroundWindowTitleSync();
-  }
-  return getMacForegroundWindowTitleSync();
+function startFeishuClipboardPoll() {
+  if (feishuClipboardPollTimer) return;
+  feishuClipboardPollTimer = setInterval(() => {
+    if (!isFeishuProgram(getForegroundAppSync())) return;
+    axFocus.invalidateAxFocusCache();
+    syncClipboardPolicy('feishu-poll');
+  }, FEISHU_CLIPBOARD_POLL_MS);
 }
 
-function isFeishuBitableForeground() {
-  const app = getForegroundAppSync();
-  if (!isFeishuProgram(app)) return false;
-  return isFeishuBitableWindowTitle(getForegroundWindowTitleSync());
+function stopFeishuClipboardPoll() {
+  if (!feishuClipboardPollTimer) return;
+  clearInterval(feishuClipboardPollTimer);
+  feishuClipboardPollTimer = null;
+}
+
+function buildClipboardExcludeList() {
+  const list = [...SPREADSHEET_CLIPBOARD_PROGRAMS];
+  if (isFeishuSpreadsheetAxFocus()) {
+    for (const name of FEISHU_CLIPBOARD_BLOCK_PROGRAMS) {
+      if (!list.includes(name)) list.push(name);
+    }
+  }
+  return list;
+}
+
+function syncClipboardPolicy(reason) {
+  if (!hook) return;
+
+  const probe = axFocus.probeAxFocusCached();
+  const list = buildClipboardExcludeList();
+  const key = list.join('\0');
+  if (key === clipboardExcludeListKey) return;
+
+  clipboardExcludeListKey = key;
+  hook.setClipboardMode(FilterMode.EXCLUDE_LIST, list);
+  diagnostics.log('clipboard policy synced', {
+    reason,
+    feishuSpreadsheetAx: isFeishuSpreadsheetAxFocus(probe),
+    axRoles: probe?.roles || [],
+    axOk: !!probe?.ok,
+    listSize: list.length,
+  });
 }
 
 function isDesktopSpreadsheetForeground() {
@@ -439,13 +446,8 @@ function isDesktopSpreadsheetForeground() {
 
 function shouldSkipDragSelectionFetch() {
   if (isDesktopSpreadsheetForeground()) return true;
-  if (isFeishuBitableForeground()) return true;
+  if (isFeishuSpreadsheetAxFocus()) return true;
   return false;
-}
-
-function isFeishuBitableContext(programName = '') {
-  if (!isFeishuProgram(programName)) return false;
-  return isFeishuBitableForeground();
 }
 
 function looksLikeGridSelection(text, programName = '') {
@@ -461,9 +463,6 @@ function looksLikeGridSelection(text, programName = '') {
   if (lines.length >= 2) return true;
   if (maxTabs >= 2) return true;
   if (maxTabs >= 1 && isDesktopSpreadsheetProgram(programName)) return true;
-  if (maxTabs >= 1 && isFeishuProgram(programName) && isFeishuBitableWindowTitle(getForegroundWindowTitleSync())) {
-    return true;
-  }
   if (maxTabs >= 1 && lines.length === 1) {
     const parts = lines[0].split('\t');
     if (parts.length >= 2 && parts.every((part) => part.length <= 200)) return true;
@@ -489,10 +488,10 @@ function isLikelySpreadsheetCellSelect(data, source = 'mouse') {
   if (looksLikeGridSelection(text, program)) return true;
   if (data?.method === SelectionMethod.CLIPBOARD) {
     if (isDesktopSpreadsheetProgram(program)) return true;
-    if (isFeishuBitableContext(program)) return true;
+    if (isFeishuSpreadsheetContext(program)) return true;
   }
   if (isDesktopSpreadsheetProgram(program) && posLevel < PositionLevel.SEL_FULL) return true;
-  if (isFeishuBitableContext(program) && posLevel < PositionLevel.SEL_FULL) return true;
+  if (isFeishuSpreadsheetContext(program) && posLevel < PositionLevel.SEL_FULL) return true;
 
   return false;
 }
@@ -500,6 +499,10 @@ function isLikelySpreadsheetCellSelect(data, source = 'mouse') {
 function shouldSkipSpreadsheetSelection(data, source = 'mouse') {
   const program = data?.programName || '';
   const text = data?.text?.trim() || '';
+
+  if (isFeishuProgram(program) && isFeishuSpreadsheetContext(program)) {
+    return 'feishu-ax-spreadsheet';
+  }
 
   if (looksLikeGridSelection(text, program)) {
     return 'grid-selection';
@@ -518,7 +521,7 @@ function shouldSkipSpreadsheetSelection(data, source = 'mouse') {
   }
 
   if (
-    isFeishuBitableContext(program) &&
+    isFeishuSpreadsheetContext(program) &&
     data?.method === SelectionMethod.CLIPBOARD &&
     source !== 'ctrl+a'
   ) {
@@ -530,7 +533,7 @@ function shouldSkipSpreadsheetSelection(data, source = 'mouse') {
       if (looksLikeGridSelection(text, program)) return 'grid-selection';
       if (isLikelySpreadsheetCellSelect(data, 'mouse')) return 'spreadsheet-cell-drag';
     }
-    if (isFeishuBitableContext(program)) {
+    if (isFeishuSpreadsheetContext(program)) {
       if (looksLikeGridSelection(text, program)) return 'grid-selection';
       if (isLikelySpreadsheetCellSelect(data, 'mouse')) return 'spreadsheet-cell-drag';
     }
@@ -549,7 +552,7 @@ function fetchSelectionAfterDrag(reason) {
     diagnostics.log('drag selection skipped', {
       reason,
       desktopSpreadsheet: isDesktopSpreadsheetForeground(),
-      feishuBitable: isFeishuBitableForeground(),
+      feishuSpreadsheetAx: isFeishuSpreadsheetAxFocus(),
       ...hookState(),
     });
     return;
@@ -687,6 +690,7 @@ function handleSelection(data) {
 
 function scheduleKeyboardSelectionFetch(reason) {
   if (!hook?.isRunning()) return;
+  if (shouldSkipDragSelectionFetch()) return;
   if (keyboardFetchTimer) clearTimeout(keyboardFetchTimer);
   keyboardFetchTimer = setTimeout(() => {
     keyboardFetchTimer = null;
@@ -708,6 +712,8 @@ function scheduleKeyboardSelectionFetch(reason) {
 }
 
 function handleMouseDown(data) {
+  axFocus.invalidateAxFocusCache();
+  syncClipboardPolicy('mouse-down');
   diagnostics.count('mouse-down');
   selectionSinceMouseDown = false;
   lastDragStart = data?.x != null ? { x: data.x, y: data.y } : null;
@@ -718,6 +724,7 @@ function handleMouseDown(data) {
 }
 
 function handleMouseUp(data) {
+  syncClipboardPolicy('mouse-up');
   diagnostics.count('mouse-up');
   lastDragEnd = data?.x != null ? { x: data.x, y: data.y } : null;
   lastMouseUp = lastDragEnd;
@@ -784,6 +791,7 @@ function startSelectionMonitor(callbacks) {
   diagnostics.log('monitor starting', hookState());
   createAndStartHook('initial');
   startHeartbeat();
+  startFeishuClipboardPoll();
 
   if (process.platform === 'win32') {
     focusMonitor.startFocusMonitor(handleForegroundChange);
@@ -792,6 +800,7 @@ function startSelectionMonitor(callbacks) {
 
 function stopSelectionMonitor() {
   stopHeartbeat();
+  stopFeishuClipboardPoll();
   if (probeTimer) {
     clearTimeout(probeTimer);
     probeTimer = null;
